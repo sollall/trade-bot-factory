@@ -1,12 +1,13 @@
-# 同じコードを paper / live の 2 つの Worker としてデプロイする。
+# 同じコードを paper / live の 2 つの Python Worker としてデプロイする。
 #   npm run deploy:paper  -> trade-bot-paper
 #   npm run deploy:live   -> trade-bot-live
+# main の .build/ は scripts/build_worker.py が生成する (npm run build)
 # database_id は `npm run setup:cloudflare` (scripts/setup-cloudflare.sh) で作成した値に置き換える。
 
 name = "trade-bot"
-main = "src/worker/index.ts"
+main = ".build/entry.py"
 compatibility_date = "2026-10-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["python_workers"]
 
 [observability]
 enabled = true

@@ -15,13 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run pytest
       - name: Ensure D1 is configured
         run: |
           if grep -q 'database_id = "00000000-0000-0000-0000-000000000000"' wrangler.toml; then
@@ -46,8 +42,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: npm ci
-      - run: npm run gen
+      - run: python scripts/build_worker.py
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply trade-bot-${{ matrix.target }} --env ${{ matrix.target }} --remote
       - name: Deploy

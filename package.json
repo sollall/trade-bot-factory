@@ -3,24 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "gen": "tsx scripts/gen-registry.ts",
-    "backtest": "npm run gen --silent && tsx src/backtest/cli.ts",
-    "new-bot": "tsx scripts/new-bot.ts",
-    "typecheck": "npm run gen && tsc --noEmit",
-    "test": "npm run gen && vitest run",
-    "dev": "npm run gen && wrangler dev --env paper --test-scheduled",
+    "build": "python3 scripts/build_worker.py",
+    "setup:cloudflare": "bash scripts/setup-cloudflare.sh",
+    "deploy:paper": "npm run build && wrangler deploy --env paper",
+    "deploy:live": "npm run build && wrangler deploy --env live",
     "db:migrate:paper": "wrangler d1 migrations apply trade-bot-paper --env paper --remote",
-    "db:migrate:live": "wrangler d1 migrations apply trade-bot-live --env live --remote",
-    "deploy:paper": "npm run gen && wrangler deploy --env paper",
-    "deploy:live": "npm run gen && wrangler deploy --env live",
-    "setup:cloudflare": "bash scripts/setup-cloudflare.sh"
+    "db:migrate:live": "wrangler d1 migrations apply trade-bot-live --env live --remote"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261023.1",
-    "@types/node": "^22.20.5",
-    "tsx": "^4.23.15",
-    "typescript": "^5.9.3",
-    "vitest": "^3.2.7",
     "wrangler": "^4.152.0"
   }
 }
