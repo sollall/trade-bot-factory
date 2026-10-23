@@ -1,0 +1,16 @@
+{
+  "name": "trade-bot-factory",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "python3 scripts/build_worker.py",
+    "setup:cloudflare": "bash scripts/setup-cloudflare.sh",
+    "deploy:paper": "npm run build && wrangler deploy --env paper",
+    "deploy:live": "npm run build && wrangler deploy --env live",
+    "db:migrate:paper": "wrangler d1 migrations apply trade-bot-paper --env paper --remote",
+    "db:migrate:live": "wrangler d1 migrations apply trade-bot-live --env live --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.152.0"
+  }
+}

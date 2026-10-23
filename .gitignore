@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.build/
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+reports/
+.dev.vars
