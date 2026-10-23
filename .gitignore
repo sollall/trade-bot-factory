@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+data/
+reports/
+.dev.vars
+src/generated/

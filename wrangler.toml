@@ -1,0 +1,39 @@
+# 同じコードを paper / live の 2 つの Worker としてデプロイする。
+#   npm run deploy:paper  -> trade-bot-paper
+#   npm run deploy:live   -> trade-bot-live
+# database_id は `npm run setup:cloudflare` (scripts/setup-cloudflare.sh) で作成した値に置き換える。
+
+name = "trade-bot"
+main = "src/worker/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[env.paper]
+name = "trade-bot-paper"
+vars = { MODE = "paper", NOTIFY_FILLS = "true" }
+
+[env.paper.triggers]
+# 毎分: 監視 + 確定足ごとの戦略実行 / 毎日 00:05 UTC: 成績レポート
+crons = ["* * * * *", "5 0 * * *"]
+
+[[env.paper.d1_databases]]
+binding = "DB"
+database_name = "trade-bot-paper"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[env.live]
+name = "trade-bot-live"
+vars = { MODE = "live", NOTIFY_FILLS = "true" }
+
+[env.live.triggers]
+crons = ["* * * * *", "5 0 * * *"]
+
+[[env.live.d1_databases]]
+binding = "DB"
+database_name = "trade-bot-live"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
