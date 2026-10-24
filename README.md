@@ -148,6 +148,19 @@ GitHub リポジトリの Settings で:
 ダッシュボードをブラウザで見るなら、トークンを URL に載せるより
 Cloudflare Access で Worker のドメインを保護するのがおすすめです。
 
+## チェーン間アビトラ (常時起動サーバー, シャドーモード)
+
+Cloudflare の cron では間に合わない速度の戦略は、安い VPS で常時動かします。
+まずは売買せずに機会を測る **シャドーモード** です (秘密鍵不要)。
+
+```bash
+python -m tbf.arb check     # 設定確認
+python -m tbf.arb run       # 監視
+python -m tbf.arb report    # 集計
+```
+
+設定は `arb.toml`、サーバー設置は `deploy/setup-server.sh`。詳細とセキュリティのチェックリストは [docs/arb.md](docs/arb.md)。
+
 ## 開発
 
 ```bash
