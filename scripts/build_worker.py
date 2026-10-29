@@ -1,7 +1,7 @@
 """
 Cloudflare にアップロードする Python モジュールを .build/ に集める。
   - worker/entry.py   -> .build/entry.py
-  - tbf/ (backtest / arb / onchain 以外) -> .build/tbf/
+  - tbf/ (backtest / arb / onchain / neutral 以外) -> .build/tbf/
   - bots/<id>/*.py    -> .build/bots/<id>/
   - bot_registry.py を生成 (Worker はファイル走査せずこの一覧から bot を読む)
 bot の import / 定義チェックもここで行うので、壊れた bot はデプロイ前に落ちる。
@@ -44,7 +44,7 @@ def main() -> None:
         shutil.rmtree(OUT)
     OUT.mkdir()
     shutil.copy2(ROOT / "worker" / "entry.py", OUT / "entry.py")
-    copy_py(ROOT / "tbf", OUT / "tbf", skip=("backtest", "arb", "onchain"))
+    copy_py(ROOT / "tbf", OUT / "tbf", skip=("backtest", "arb", "onchain", "neutral"))
     (OUT / "bots").mkdir()
     (OUT / "bots" / "__init__.py").write_text("")
     for i in ids:

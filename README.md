@@ -148,6 +148,33 @@ GitHub リポジトリの Settings で:
 ダッシュボードをブラウザで見るなら、トークンを URL に載せるより
 Cloudflare Access で Worker のドメインを保護するのがおすすめです。
 
+## デルタニュートラル (ファンディング) のバックテスト
+
+現物ロング + 無期限先物ショートで価格変動を打ち消し、先物のファンディングを受け取る戦略を
+Hyperliquid の過去データ (1 時間ごとのファンディング・プレミアム・1 時間足) で検証します。
+
+```bash
+python -m tbf.neutral --coin ETH --days 180
+python -m tbf.neutral --coin BTC,ETH,SOL --param entry_apr=15 --param leverage=2
+python -m tbf.neutral --coin ETH --sweep entry_apr=5,10,20 --sweep leverage=2,3,5   # 総当たり比較
+python -m tbf.neutral --coin ETH --strategy bots.my_neutral.strategy:decide          # 自作戦略
+```
+
+- 毎時: 1 時間足の高値で先物ショートの清算を判定 → ファンディングを受け払い → 評価 → 戦略で建玉を調整
+- 計上するもの: ファンディング、現物・先物の手数料とスリッページ、先物と現物の価格差 (プレミアム) の変化、
+  実効レバレッジが目標から外れたときの資金移動 (`transfer_fee_usd`)、清算 (証拠金は全損とみなす)
+- 既定の戦略は「直近 `lookback_hours` の平均ファンディングが年率 `entry_apr`% 以上で建て、`exit_apr`% 以下で解消
+  (最低 `min_hold_hours` は保有)」。常に「持ちっぱなし」の結果と並べて表示します
+- 自作戦略は `NeutralContext` (ファンディング履歴・終値・現在の建玉・経過時間・params・state) を受け取り、
+  目標の建玉比率 0..1 (None なら現状維持) を返す関数です (`tbf/neutral/strategies.py` 参照)
+- エンジン側のパラメータ: `capital` `leverage` `spot_fee` `perp_fee` `slippage_bps` `transfer_fee_usd`
+  `rebalance_band` `maintenance_margin` (既定値は `tbf/neutral/engine.py` の `NeutralParams`)
+- 結果は `reports/neutral_<COIN>.json` / `.html` (資産推移・ファンディング推移・イベント)
+
+前提と限界: 現物価格は Hyperliquid の 1 時間足を使い、先物価格は「現物 × (1 + プレミアム)」で近似します。
+1 時間足は API の制約で直近 5000 本 (約 208 日) までです。1 時間の中の急騰は高値でしか判定しないので、
+清算の判定は実際より甘くなることがあります。
+
 ## チェーン間アビトラ (常時起動サーバー, シャドーモード)
 
 Cloudflare の cron では間に合わない速度の戦略は、安い VPS で常時動かします。
