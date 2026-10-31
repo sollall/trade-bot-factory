@@ -111,7 +111,13 @@ async def backtest_async(
     bot: Bot,
     bars: Mapping[str, Sequence[Candle]],
     funding: Optional[Mapping[str, Sequence[FundingPoint]]] = None,
+    trade_from: Optional[int] = None,
+    trade_until: Optional[int] = None,
 ) -> BacktestResult:
+    """
+    trade_from / trade_until (UTC ms) を指定すると、その間の足だけで売買・評価する。
+    trade_from より前の足は、戦略に渡す履歴 (lookback) としてだけ使う。
+    """
     insts = bot.instruments
     missing = set(insts) - set(bars)
     if missing:
@@ -139,11 +145,17 @@ async def backtest_async(
     async def transfer_fn(t: Transfer) -> bool:
         return True
 
-    if times:
-        res.equity.append(EquityPoint(times[0], bot.capital))
-
-    for i, t in enumerate(times):
+    for t in times:
+        if trade_until is not None and t + tf > trade_until:
+            break
         bar = {a: by_time[a][t] for a in insts}
+        if trade_from is not None and t < trade_from:
+            # 助走: 履歴として積むだけ
+            for a in insts:
+                hist[a].append(bar[a])
+            continue
+        if not res.equity:
+            res.equity.append(EquityPoint(t, bot.capital))
         cur_time = t
         was_flat = not pf.holdings
 
@@ -206,7 +218,7 @@ async def backtest_async(
             if bot.risk.flatten_on_halt and pf.holdings:
                 pending = {}
             continue
-        if i + 1 < bot.lookback:
+        if len(hist[bot.primary]) < bot.lookback:
             continue
 
         window = {a: hist[a][-bot.lookback :] for a in insts}

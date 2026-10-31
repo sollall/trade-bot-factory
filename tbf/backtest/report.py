@@ -21,7 +21,7 @@ def _path(pts, w: int, h: int, t0: int, t1: int, lo: float, hi: float) -> str:
 COLORS = ["#2563eb", "#9ca3af", "#d97706", "#059669", "#db2777", "#7c3aed"]
 
 
-def render_html(title: str, results: Sequence[tuple[str, BacktestResult]]) -> str:
+def render_html(title: str, results: Sequence[tuple[str, BacktestResult]], extra_html: str = "") -> str:
     """外部依存なしの HTML レポート。results は (ラベル, 結果) のリスト (先頭が主役)"""
     w, h = 900, 300
     svg = ""
@@ -72,6 +72,7 @@ table{{border-collapse:collapse;margin-top:1rem}}td,th{{padding:4px 10px;border-
 td:first-child,th:first-child{{text-align:left}}</style></head>
 <body><h1>{html.escape(title)}</h1>{svg}
 <div class="wrap"><table>{head}{''.join(rows)}</table></div>
+{extra_html}
 <h2>イベント ({html.escape(results[0][0]) if results else ''})</h2><div class="wrap"><table><tr><th>時刻 (UTC)</th><th>種類</th><th>詳細</th></tr>{events}</table></div>
 </body></html>"""
 
