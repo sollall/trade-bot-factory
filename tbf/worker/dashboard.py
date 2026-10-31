@@ -50,7 +50,7 @@ def render_dashboard(mode: str, items: Sequence[BotSummary]) -> str:
         m = s.metrics
         rows.append(
             f"""<tr>
-<td><a href="api/bots/{_esc(s.bot.id)}">{_esc(s.bot.id)}</a><div class="sub">{_esc(s.bot.symbol)} {s.bot.timeframe}</div></td>
+<td><a href="api/bots/{_esc(s.bot.id)}">{_esc(s.bot.id)}</a><div class="sub">{_esc(", ".join(str(i) for i in s.bot.instruments.values()))} {s.bot.timeframe}</div></td>
 <td class="st {status}">{status}{reason}</td>
 <td class="num">{s.equity:.2f}</td>
 <td class="num {'pos' if ret >= 0 else 'neg'}">{_pct(ret)}</td>
