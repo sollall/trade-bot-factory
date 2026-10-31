@@ -16,6 +16,7 @@ TIMEFRAME_MS: dict[str, int] = {
     "4h": 4 * 60 * 60_000,
     "1d": 24 * 60 * 60_000,
 }
+HOUR = TIMEFRAME_MS["1h"]
 
 
 @dataclass(frozen=True)
@@ -27,15 +28,27 @@ class Candle:
     high: float
     low: float
     close: float
-    volume: float
+    volume: float = 0.0
 
 
 @dataclass(frozen=True)
 class Position:
-    """qty は保有数量 (base 通貨, 現物なので >= 0)"""
+    """qty は保有数量 (+ ロング / - ショート)"""
 
     qty: float = 0.0
     avg_price: float = 0.0
+
+
+@dataclass(frozen=True)
+class FundingPoint:
+    """無期限先物のファンディング"""
+
+    # 支払いが発生した時刻 (UTC ms, 時間単位に丸めたもの)
+    time: int
+    # 1 回あたりのレート (+ ならロングがショートに払う)
+    rate: float
+    # 先物価格とオラクル (現物指数) の乖離率
+    premium: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -45,8 +58,12 @@ class Fill:
     qty: float
     price: float
     fee: float
-    # この約定で確定した損益 (sell のみ非 0)
+    # 決済 (持ち高を減らす約定) で確定した損益 (手数料込み)
     realized_pnl: float = 0.0
+    # bot 内の銘柄の別名
+    instrument: str = ""
+    # 持ち高を減らす約定か
+    reduce: bool = False
 
 
 @dataclass(frozen=True)

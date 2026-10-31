@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-from tbf.core.types import TIMEFRAME_MS, Candle
+from tbf.core.types import TIMEFRAME_MS, Candle, FundingPoint
 from tbf.http import Http
 
 # 地域制限を受けにくい公開データ用エンドポイント
@@ -88,3 +88,9 @@ class BinanceMarket:
 
     async def recent(self, symbol: str, timeframe: str, count: int, now: int) -> list[Candle]:
         return await fetch_recent_closed(self.http, symbol, timeframe, count, now, self.base_url)
+
+    async def history(self, symbol: str, timeframe: str, start: int, end: int) -> list[Candle]:
+        return await fetch_range(self.http, symbol, timeframe, start, end, self.base_url)
+
+    async def funding(self, symbol: str, start: int, end: int) -> list[FundingPoint]:
+        return []  # 現物にファンディングはない

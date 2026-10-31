@@ -54,12 +54,30 @@ class FakeFetchResponse:
 
 
 async def fake_fetch(url, opts):
+    if "hyperliquid" in url:
+        req = json.loads(opts["body"])
+        cur = NOW // HOUR * HOUR
+        if req["type"] == "allMids":
+            return FakeFetchResponse(200, json.dumps({"ETH": "3000", "BTC": "60000"}))
+        if req["type"] == "candleSnapshot":
+            q = req["req"]
+            rows = [
+                {"t": t, "o": "3000", "h": "3001", "l": "2999", "c": "3000", "v": "1"}
+                for t in range(q["startTime"] // HOUR * HOUR, cur, HOUR)
+            ]
+            return FakeFetchResponse(200, json.dumps(rows))
+        if req["type"] == "fundingHistory":
+            rows = [
+                {"coin": "ETH", "fundingRate": "0.00003", "premium": "0", "time": t}
+                for t in range(req["startTime"] // HOUR * HOUR + HOUR, req["endTime"] + 1, HOUR)
+            ][:500]
+            return FakeFetchResponse(200, json.dumps(rows))
     if "/ticker/price" in url:
         symbols = json.loads(parse_qs(urlparse(url).query)["symbols"][0])
-        return FakeFetchResponse(200, json.dumps([{"symbol": s, "price": "150"} for s in symbols]))
+        return FakeFetchResponse(200, json.dumps([{"symbol": s, "price": "3000"} for s in symbols]))
     if "/klines" in url:
         cur = NOW // HOUR * HOUR
-        rows = [[cur - i * HOUR, "1", "1", "1", str(100 + 100 - i), "1"] for i in range(100, -1, -1)]
+        rows = [[cur - i * HOUR, "1", "1", "1", str(3000 + 100 - i), "1"] for i in range(100, -1, -1)]
         return FakeFetchResponse(200, json.dumps(rows))
     return FakeFetchResponse(404, "")
 
@@ -100,7 +118,8 @@ def make_worker(entry, db, **env):
 
 def migrated_db():
     db = SqliteDB()
-    db.migrate((ROOT / "migrations" / "0001_init.sql").read_text())
+    for f in sorted((ROOT / "migrations").glob("*.sql")):
+        db.migrate(f.read_text())
     return db
 
 
@@ -109,18 +128,22 @@ async def test_scheduled_and_fetch_through_entry(entry):
     w = make_worker(entry, db, ADMIN_TOKEN="t")
     await w.scheduled(types.SimpleNamespace(cron="* * * * *", scheduledTime=float(NOW)))
 
-    rows = await db.query("SELECT bot_id, status, qty, halt_reason FROM bot_state ORDER BY bot_id")
-    assert [r["bot_id"] for r in rows] == ["rsi_reversion", "sma_cross"]
+    rows = await db.query("SELECT bot_id, status, portfolio, halt_reason FROM bot_state ORDER BY bot_id")
+    assert [r["bot_id"] for r in rows] == ["eth_funding_carry", "eth_funding_hedged", "rsi_reversion", "sma_cross"]
     assert not await db.query("SELECT * FROM events WHERE level='error'")
+    pf = {r["bot_id"]: json.loads(r["portfolio"]) for r in rows}
     # 上昇トレンドのデータなので sma_cross は買っている
-    assert next(r for r in rows if r["bot_id"] == "sma_cross")["qty"] > 0
+    assert pf["sma_cross"]["positions"]["BTCUSDT"][0] > 0
+    # ファンディング年率 26% なので両方ともヘッジ建て
+    for b in ("eth_funding_carry", "eth_funding_hedged"):
+        assert pf[b]["positions"]["spot"][0] == -pf[b]["positions"]["perp"][0]
     # halt_reason は NULL のまま (None を D1 に渡さず NULL リテラルに置換している)
     assert all(r["halt_reason"] is None for r in rows)
 
     req = types.SimpleNamespace(method="GET", url="https://w/api/bots", headers={"authorization": "Bearer t"})
     res = await w.fetch(req)
     assert res.status == 200 and res.headers["content-type"] == "application/json"
-    assert {b["id"] for b in json.loads(res.body)} == {"rsi_reversion", "sma_cross"}
+    assert {b["id"] for b in json.loads(res.body)} == {"eth_funding_carry", "eth_funding_hedged", "rsi_reversion", "sma_cross"}
 
     req = types.SimpleNamespace(method="GET", url="https://w/", headers={})
     assert (await w.fetch(req)).status == 401

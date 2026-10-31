@@ -27,6 +27,7 @@ def check_risk(
 
 
 def next_consecutive_losses(current: int, fill: Fill) -> int:
-    if fill.side != "sell":
+    """決済の約定ごとに連敗数を更新する"""
+    if not fill.reduce:
         return current
     return 0 if fill.realized_pnl > 0 else current + 1

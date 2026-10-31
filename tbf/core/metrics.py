@@ -52,7 +52,7 @@ def compute_metrics(equity: Sequence[EquityPoint], fills: Sequence[Fill]) -> Met
         if sd > 0:
             sharpe = mean / sd * math.sqrt(per_year)
 
-    closes = [f for f in fills if f.side == "sell"]
+    closes = [f for f in fills if f.reduce]
     wins = [f for f in closes if f.realized_pnl > 0]
     gross_win = sum(f.realized_pnl for f in wins)
     gross_loss = -sum(f.realized_pnl for f in closes if f.realized_pnl <= 0)
