@@ -68,6 +68,13 @@ class BotRow:
         return d
 
 
+@dataclass(frozen=True)
+class ExecInfo:
+    bench_price: float
+    delay_ms: int
+    gap_bps: float
+
+
 _COLS = {f.name for f in fields(BotRow)}
 
 
@@ -130,12 +137,24 @@ class Store:
             (equity, equity, now, bot_id),
         )
 
-    async def add_fill(self, bot_id: str, f: Fill, order_id: Optional[str], reason: Optional[str]) -> None:
+    async def add_fill(
+        self, bot_id: str, f: Fill, order_id: Optional[str], reason: Optional[str], ex: Optional[ExecInfo] = None
+    ) -> None:
         await self.db.execute(
-            "INSERT INTO fills (bot_id, time, side, qty, price, fee, realized_pnl, order_id, reason, instrument, reduce) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (bot_id, f.time, f.side, f.qty, f.price, f.fee, f.realized_pnl, order_id, reason, f.instrument, int(f.reduce)),
+            "INSERT INTO fills (bot_id, time, side, qty, price, fee, realized_pnl, order_id, reason, instrument, reduce, "
+            "bench_price, delay_ms, gap_bps) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                bot_id, f.time, f.side, f.qty, f.price, f.fee, f.realized_pnl, order_id, reason, f.instrument, int(f.reduce),
+                ex.bench_price if ex else None, ex.delay_ms if ex else None, ex.gap_bps if ex else None,
+            ),
         )
+
+    async def execution_rows(self, since: int, bot_id: Optional[str] = None) -> list[dict]:
+        """遅れとバックテストとの差を記録した約定"""
+        sql = "SELECT bot_id, qty, bench_price, delay_ms, gap_bps FROM fills WHERE time >= ? AND gap_bps IS NOT NULL"
+        if bot_id:
+            return await self.db.query(sql + " AND bot_id = ?", (since, bot_id))
+        return await self.db.query(sql, (since,))
 
     async def add_equity(self, bot_id: str, p: EquityPoint) -> None:
         await self.db.execute(
@@ -166,6 +185,27 @@ class Store:
             "SELECT time, equity FROM equity WHERE bot_id=? AND time >= ? ORDER BY time", (bot_id, since)
         )
         return [EquityPoint(r["time"], r["equity"]) for r in rows]
+
+    async def rows(self) -> list[BotRow]:
+        """DB にある全 bot の行 (今のデプロイに含まれない bot も含む)"""
+        return [_row(r) for r in await self.db.query("SELECT * FROM bot_state ORDER BY bot_id")]
+
+    async def error_counts(self, since: int) -> dict[str, int]:
+        rows = await self.db.query(
+            "SELECT bot_id, COUNT(*) AS n FROM events WHERE level='error' AND time >= ? AND bot_id IS NOT NULL GROUP BY bot_id",
+            (since,),
+        )
+        return {r["bot_id"]: int(r["n"]) for r in rows}
+
+    async def save_heartbeat(self, time: int, build: str, bots: int, errors: int, duration_ms: int, lag_ms: int = 0) -> None:
+        await self.db.execute(
+            "INSERT OR REPLACE INTO heartbeat (name, time, build, bots, errors, duration_ms, lag_ms) VALUES ('tick',?,?,?,?,?,?)",
+            (time, build, bots, errors, duration_ms, lag_ms),
+        )
+
+    async def heartbeat(self) -> Optional[dict]:
+        rows = await self.db.query("SELECT * FROM heartbeat WHERE name='tick'")
+        return rows[0] if rows else None
 
     async def events(self, bot_id: Optional[str] = None, limit: int = 50) -> list[dict]:
         if bot_id:

@@ -1,0 +1,69 @@
+# 1 つの Worker (paper / live) を止めずに入れ替える。deploy.yml から呼ばれる。
+#
+#  1. preflight   デプロイから外れる bot に持ち高が残っていないか D1 を確認 (live は止める)
+#  2. bookmark    D1 Time Travel の現時点のブックマークを記録 (データを戻すときの目印)
+#  3. migrate     D1 migration を適用 (追加のみ。旧版が動いたままでも壊れない — tests/test_migrations.py が検査)
+#  4. deploy      wrangler deploy は原子的に切り替わる。実行中の cron は旧版のまま最後まで走り、
+#                 次の cron から新版になる (同じ足の二重発注は claim_candle / account_version で防止)
+#  5. verify      /healthz で「新しい版の cron が完了した」ことを確認
+#  6. rollback    5 が失敗したら直前の版に戻して通知
+name: Deploy worker
+on:
+  workflow_call:
+    inputs:
+      target:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TARGET: ${{ inputs.target }}
+      DB_NAME: trade-bot-${{ inputs.target }}
+      WORKER_URL: ${{ vars.WORKER_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: python scripts/build_worker.py
+
+      - name: Preflight (positions left by removed bots)
+        run: |
+          npx wrangler d1 execute "$DB_NAME" --env "$TARGET" --remote --json \
+            --command "SELECT bot_id, status, portfolio, qty FROM bot_state" > rows.json
+          python scripts/deploy_guard.py preflight --mode "$TARGET" --rows rows.json --allow "${{ vars.ALLOW_UNMANAGED }}"
+
+      - name: D1 bookmark (Time Travel)
+        continue-on-error: true
+        run: npx wrangler d1 time-travel info "$DB_NAME" --env "$TARGET" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply "$DB_NAME" --env "$TARGET" --remote
+
+      - name: Deploy
+        id: deploy
+        run: npx wrangler deploy --env "$TARGET" --message "deploy ${GITHUB_SHA::12}"
+
+      - name: Verify new version is running
+        if: env.WORKER_URL != ''
+        run: python scripts/deploy_guard.py verify --url "$WORKER_URL" --build "$GITHUB_SHA" --timeout 300
+
+      - name: Skip verify (WORKER_URL not set)
+        if: env.WORKER_URL == ''
+        run: echo "::warning::Environment 変数 WORKER_URL が未設定のため、デプロイ後の確認と自動ロールバックをしていません"
+
+      - name: Roll back to previous version
+        if: failure() && steps.deploy.outcome == 'success'
+        run: |
+          npx wrangler rollback --env "$TARGET" --yes --message "auto rollback: ${GITHUB_SHA::12} failed health check"
+          echo "::error::$TARGET を直前の版にロールバックしました。D1 migration は戻していません (追加のみなので旧版でも動きます)"

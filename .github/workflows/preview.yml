@@ -1,0 +1,185 @@
+# PR ごとのお試し paper Worker。
+#   ラベル paper-trial を付けた PR だけが対象。PR で追加・変更した bot だけを、その PR 専用の
+#   Worker (trade-bot-pr-<番号>) と D1 で paper 運用する。paper / live の Worker・D1 とは共有しない。
+#   - ラベル付与 / push / reopen: D1 を作り直して (= 成績リセット) デプロイ → 動作確認 → PR にコメント
+#   - 毎日: 開いているお試し PR の成績コメントを更新
+#   - クローズ / マージ / ラベル外し: 最終成績をコメントに残し、Worker と D1 を削除
+# 必要なもの: Secrets CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, PREVIEW_ADMIN_TOKEN
+#            (任意) PREVIEW_WEBHOOK_URL。Environment "preview" を作っておく。詳しくは docs/ops.md
+name: Preview (PR paper trial)
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize, reopened, closed]
+  schedule:
+    - cron: "17 0 * * *"   # Worker の日次処理 (00:05 UTC) の後
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TRIAL_LABEL: paper-trial
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.action != 'closed' && github.event.action != 'unlabeled' &&
+      contains(github.event.pull_request.labels.*.name, 'paper-trial') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'paper-trial')
+    runs-on: ubuntu-latest
+    environment: preview
+    concurrency:
+      group: preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PREVIEW_ADMIN_TOKEN: ${{ secrets.PREVIEW_ADMIN_TOKEN }}
+      PREVIEW_WEBHOOK_URL: ${{ secrets.PREVIEW_WEBHOOK_URL }}
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+
+      - name: Check secrets
+        run: |
+          if [ -z "$PREVIEW_ADMIN_TOKEN" ]; then
+            echo "::error::Secret PREVIEW_ADMIN_TOKEN が未設定です (お試し Worker のダッシュボード/API の認証に使う)"; exit 1
+          fi
+
+      - name: Select bots and build
+        run: |
+          git fetch -q origin "$BASE_REF"
+          BOTS=$(python scripts/preview.py bots --base "origin/$BASE_REF")
+          echo "BOTS=$BOTS" >> "$GITHUB_ENV"
+          python scripts/build_worker.py --only "$BOTS"
+
+      - name: Create fresh D1 (reset)
+        run: |
+          DB="trade-bot-pr-$PR-${GITHUB_SHA::7}-$GITHUB_RUN_ATTEMPT"
+          npx wrangler d1 create "$DB" >/dev/null
+          DB_ID=$(npx wrangler d1 list --json | jq -r --arg n "$DB" '.[] | select(.name == $n) | .uuid')
+          [ -n "$DB_ID" ] || { echo "::error::D1 $DB が見つかりません"; exit 1; }
+          echo "DB=$DB" >> "$GITHUB_ENV"
+          python scripts/preview.py config --pr "$PR" --db-name "$DB" --db-id "$DB_ID"
+          npx wrangler d1 migrations apply "$DB" -c wrangler.preview.toml --remote
+
+      - name: Deploy
+        id: deploy
+        run: |
+          jq -n --arg t "$PREVIEW_ADMIN_TOKEN" --arg w "$PREVIEW_WEBHOOK_URL" \
+            '{ADMIN_TOKEN: $t} + (if $w != "" then {WEBHOOK_URL: $w} else {} end)' > "$RUNNER_TEMP/secrets.json"
+          npx wrangler deploy -c wrangler.preview.toml --secrets-file "$RUNNER_TEMP/secrets.json" \
+            --message "pr-$PR ${HEAD_SHA::12}"
+          rm -f "$RUNNER_TEMP/secrets.json"
+          SUB=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r .result.subdomain)
+          echo "URL=https://trade-bot-pr-$PR.$SUB.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Delete previous D1 of this PR
+        if: steps.deploy.outcome == 'success'
+        run: |
+          npx wrangler d1 list --json \
+            | jq -r --arg p "trade-bot-pr-$PR-" --arg cur "$DB" '.[] | select(.name | startswith($p)) | select(.name != $cur) | .name' \
+            | while read -r name; do npx wrangler d1 delete "$name" -y; done
+
+      - name: Delete unused D1 (deploy failed)
+        if: failure() && steps.deploy.outcome != 'success' && env.DB != ''
+        run: npx wrangler d1 delete "$DB" -y
+
+      - name: Verify
+        if: steps.deploy.outcome == 'success'
+        run: python scripts/deploy_guard.py verify --url "$URL" --build "$GITHUB_SHA" --timeout 300
+
+      - name: Comment
+        if: always() && steps.deploy.outcome == 'success'
+        run: |
+          scripts/pr_comment.sh get "$PR" > "$RUNNER_TEMP/old.md"
+          python scripts/preview.py report --meta-from "$RUNNER_TEMP/old.md" --url "$URL" --token "$PREVIEW_ADMIN_TOKEN" \
+            --sha "$HEAD_SHA" --started "$(date +%s)" > "$RUNNER_TEMP/body.md"
+          echo -e "\n動かしている bot: \`$BOTS\`" >> "$RUNNER_TEMP/body.md"
+          scripts/pr_comment.sh put "$PR" "$RUNNER_TEMP/body.md"
+
+  cleanup:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action == 'closed' ||
+       (github.event.action == 'unlabeled' && github.event.label.name == 'paper-trial'))
+    runs-on: ubuntu-latest
+    environment: preview
+    concurrency:
+      group: preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PREVIEW_ADMIN_TOKEN: ${{ secrets.PREVIEW_ADMIN_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+
+      - name: Final report
+        run: |
+          scripts/pr_comment.sh get "$PR" > "$RUNNER_TEMP/old.md"
+          if [ ! -s "$RUNNER_TEMP/old.md" ]; then echo "お試し Worker のコメントがありません"; exit 0; fi
+          python scripts/preview.py report --meta-from "$RUNNER_TEMP/old.md" --token "$PREVIEW_ADMIN_TOKEN" --final > "$RUNNER_TEMP/body.md"
+          scripts/pr_comment.sh put "$PR" "$RUNNER_TEMP/body.md"
+
+      - name: Delete worker and D1
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/trade-bot-pr-$PR?force=true")
+          echo "delete worker trade-bot-pr-$PR: HTTP $code"
+          [ "$code" = 200 ] || [ "$code" = 404 ] || exit 1
+          npx wrangler d1 list --json \
+            | jq -r --arg p "trade-bot-pr-$PR-" '.[] | select(.name | startswith($p)) | .name' \
+            | while read -r name; do npx wrangler d1 delete "$name" -y; done
+
+  report:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: preview
+    env:
+      PREVIEW_ADMIN_TOKEN: ${{ secrets.PREVIEW_ADMIN_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Update trial reports
+        run: |
+          for pr in $(gh pr list --label "$TRIAL_LABEL" --state open --json number --jq '.[].number'); do
+            scripts/pr_comment.sh get "$pr" > "$RUNNER_TEMP/old.md"
+            [ -s "$RUNNER_TEMP/old.md" ] || continue
+            bots_line=$(grep '^動かしている bot:' "$RUNNER_TEMP/old.md" || true)
+            python scripts/preview.py report --meta-from "$RUNNER_TEMP/old.md" --token "$PREVIEW_ADMIN_TOKEN" > "$RUNNER_TEMP/body.md"
+            [ -n "$bots_line" ] && echo -e "\n$bots_line" >> "$RUNNER_TEMP/body.md"
+            scripts/pr_comment.sh put "$pr" "$RUNNER_TEMP/body.md"
+            echo "updated PR #$pr"
+          done

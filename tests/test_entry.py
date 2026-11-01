@@ -105,7 +105,7 @@ def entry(monkeypatch):
         monkeypatch.setitem(sys.modules, name, mod)
     # .build/ を Cloudflare と同じくモジュールルートにする
     monkeypatch.syspath_prepend(str(ROOT / ".build"))
-    for m in [m for m in sys.modules if m in ("entry", "bot_registry") or m == "bots" or m.startswith("bots.")]:
+    for m in [m for m in sys.modules if m in ("entry", "bot_registry", "build_info") or m == "bots" or m.startswith("bots.")]:
         monkeypatch.delitem(sys.modules, m)
     return importlib.import_module("entry")
 
@@ -153,3 +153,15 @@ def test_d1_null_substitution(entry):
     d1 = entry.D1(FakeD1(None))
     stmt = d1._stmt("UPDATE t SET a=?, b=? WHERE c=?", [1, None, 3])
     assert stmt.sql == "UPDATE t SET a=?, b=NULL WHERE c=?" and stmt.args == (1, 3)
+
+
+async def test_healthz_reports_build_after_tick(entry):
+    import build_info
+
+    db = migrated_db()
+    w = make_worker(entry, db, ADMIN_TOKEN="t")
+    req = types.SimpleNamespace(method="GET", url="https://w/healthz", headers={})
+    assert (await w.fetch(req)).status == 503  # まだ cron が動いていない
+    await w.scheduled(types.SimpleNamespace(cron="* * * * *", scheduledTime=float(NOW)))
+    hb = (await db.query("SELECT * FROM heartbeat"))[0]
+    assert hb["build"] == build_info.BUILD and hb["bots"] == 4

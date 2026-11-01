@@ -1,14 +1,21 @@
-# main に push されたら paper と live の Worker をデプロイする。
+# main に push (PR をマージ) されたら paper → live の順に Worker をデプロイする。
 # 必要な GitHub Secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
-# live は GitHub Environment "live" を通るので、Settings > Environments で
-# Required reviewers を設定すると本番デプロイ前に承認を挟める。
+# 各 Environment (paper / live) の変数:
+#   WORKER_URL       Worker の URL (例 https://trade-bot-paper.<sub>.workers.dev)。
+#                    設定するとデプロイ後に /healthz で新しい版の cron 完了を確認し、だめなら直前の版に戻す
+#   ALLOW_UNMANAGED  (任意) 持ち高が残ったままデプロイから外すことを許す bot id (カンマ区切り)
+# live に Required reviewers を付けると本番デプロイ前に承認を挟める。
+# 詳しくは docs/ops.md
 name: Deploy
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-concurrency: deploy
+# デプロイは常に 1 つずつ。実行中のデプロイは途中で止めない
+concurrency:
+  group: deploy
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -25,29 +32,17 @@ jobs:
             exit 1
           fi
 
-  deploy:
+  paper:
     needs: check
-    runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 1
-      matrix:
-        target: [paper, live]
-    environment: ${{ matrix.target }}
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: npm ci
-      - run: python scripts/build_worker.py
-      - name: Apply D1 migrations
-        run: npx wrangler d1 migrations apply trade-bot-${{ matrix.target }} --env ${{ matrix.target }} --remote
-      - name: Deploy
-        run: npx wrangler deploy --env ${{ matrix.target }}
+    uses: ./.github/workflows/deploy-worker.yml
+    with:
+      target: paper
+    secrets: inherit
+
+  # paper で新しい版が動いたことを確認してから live へ
+  live:
+    needs: paper
+    uses: ./.github/workflows/deploy-worker.yml
+    with:
+      target: live
+    secrets: inherit

@@ -1,0 +1,28 @@
+# <...> を自分の Worker の URL に書き換える。トークンは Worker の ADMIN_TOKEN と同じ値を
+# prometheus/secrets/{paper,live}_token に 1 行で置く (chmod 600, git には入れない)
+global:
+  scrape_interval: 60s       # Worker の cron と同じ 1 分
+  scrape_timeout: 20s
+  evaluation_interval: 60s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: trade-bot-paper
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/paper_token
+    static_configs:
+      - targets: ["trade-bot-paper.<your-subdomain>.workers.dev"]
+
+  - job_name: trade-bot-live
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/live_token
+    static_configs:
+      - targets: ["trade-bot-live.<your-subdomain>.workers.dev"]

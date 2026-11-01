@@ -133,9 +133,12 @@ bot = Bot(
 ### 推奨フロー
 
 1. `python -m tbf.backtest --bot my_bot` で検証
-2. `deploy=["paper"]` で main に push → paper Worker で実データで検証
-3. ダッシュボードや日次レポートで成績を確認
-4. 良ければ `deploy=["paper", "live"]` にして push → 本番稼働 (GitHub Environment の承認を挟める)
+2. PR を作ってラベル `paper-trial` を付ける → その PR 専用の paper Worker で実データ検証が始まる
+   (push するたびにリセット。成績は毎日 PR にコメントされる)
+3. 良ければ `deploy=["paper", "live"]` (または `["paper"]` で main の paper で継続観察) にしてマージ → 本番稼働
+   (GitHub Environment の承認を挟める)。だめなら PR を閉じればお試し Worker も消える
+
+詳しくは [docs/ops.md](docs/ops.md)。
 
 ## ローカルバックテスト
 
@@ -207,9 +210,11 @@ GitHub リポジトリの Settings で:
 
 - Secrets: `CLOUDFLARE_API_TOKEN` (Workers と D1 の編集権限), `CLOUDFLARE_ACCOUNT_ID`
 - Environments: `paper` と `live` を作成。`live` に Required reviewers を付けると本番デプロイ前に承認が必要になる
+- 各 Environment の Variables に `WORKER_URL` (Worker の URL)。デプロイ後の動作確認と自動ロールバックに使う
 
 `wrangler.toml` をコミットして main に push すると `.github/workflows/deploy.yml` が
-テスト → ビルド → migration → paper デプロイ → live デプロイ を行います。
+テスト → paper (持ち高の取り残しチェック → migration → デプロイ → 新しい版の cron 完了を確認、だめなら自動ロールバック) → live (同じ手順)
+を行います。デプロイ中も cron は止まりません。詳細と bot を消すときの手順は [docs/ops.md](docs/ops.md)。
 手元からデプロイする場合は `npm run deploy:paper` / `npm run deploy:live`。
 
 ## 監視
@@ -234,9 +239,15 @@ GitHub リポジトリの Settings で:
 | `POST /api/bots/:id/halt?flatten=true` | 手動停止 (flatten で手仕舞い) |
 | `POST /api/bots/:id/resume` | 再開 (ピーク・連敗数は現在値から数え直し) |
 | `POST /api/tick` | cron を待たずに 1 回実行 |
+| `GET /metrics` | Prometheus 形式のメトリクス (資産・DD・持ち高・停止・エラー・cron の遅れ) |
+| `GET /healthz` | **認証なし**。cron が 3 分以上完了していなければ 503 (外部の死活監視・デプロイ後の確認用) |
 
 ダッシュボードをブラウザで見るなら、トークンを URL に載せるより
-Cloudflare Access で Worker のドメインを保護するのがおすすめです。
+Cloudflare Access で Worker のドメインを保護するのがおすすめです (`/healthz` と `/metrics` は Bypass に)。
+
+長期の推移やアラートは、OSS の監視スタック (Prometheus + Grafana + Uptime Kuma, `deploy/monitoring/`) で見られます。
+`HEARTBEAT_URL` を設定すると cron が完了するたびに ping するので、Healthchecks.io などで「止まった」ことを検知できます。
+→ [docs/ops.md](docs/ops.md)
 
 ## チェーン間アビトラ (常時起動サーバー, シャドーモード)
 
