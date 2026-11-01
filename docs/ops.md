@@ -145,6 +145,26 @@ D1 を戻すと、その後の約定記録も消えます (取引所側の実際
 | `tbf_bot_position_qty{instrument}` | 持ち高 |
 | `tbf_bot_last_candle_timestamp_seconds` / `tbf_bot_timeframe_seconds` | 戦略が新しい足で動いているか |
 | `tbf_unmanaged_position_qty{bot,instrument}` | デプロイから外れた bot に残った持ち高 |
+| `tbf_last_tick_lag_seconds` | cron の予定時刻から実際に動き出すまでの遅れ |
+| `tbf_bot_exec_delay_seconds{stat=avg\|p95\|max}` / `tbf_bot_exec_gap_bps` / `tbf_bot_exec_gap_usd_30d` | 約定の質 (下記) |
+
+## Workers の遅延で足りているか (約定の質)
+
+Workers は毎分の cron で動くので、VM で常駐させるより発注が遅れます (cron の起動待ち + Python の起動 + 取引所との通信)。
+それが成績にどれだけ効いているかを、戦略の判断による約定ごとに記録しています (停止時の手仕舞いなどは除く)。
+
+| | 意味 |
+|---|---|
+| **発注まで** (`delay`) | 判断に使った足が確定してから発注するまでの秒数 |
+| **対バックテスト** (`gap_bps`) | 実際の約定価格と、バックテストが仮定する約定価格 (確定足の終値 ≒ 次の足の始値 + 同じスリッページ) の差。約定代金で加重、**+ は不利** |
+| `gap_usd` | その差を金額にしたもの (バックテストより何ドル不利だったか) |
+
+- paper の約定は「発注時点の価格 + 想定スリッページ」なので、`gap_bps` はほぼ **遅れの間に動いた値段** です。
+  live では実際のスリッページとの差も含みます
+- 1 回ごとの値は上下にばらつくので、**30 日の平均** を見ます。0 付近なら遅れは効いていません。
+  手数料 1 回分 (Binance 現物 10bps) に近い・超えるなら、短い足の戦略や VM での常駐を検討する目安です
+  (Prometheus のアラート `ExecutionGapHigh`)
+- 見る場所: `/api/bots` の `execution`、日次レポート、お試し PR のコメント、Grafana の「足の確定から発注まで」「約定価格 対 バックテストの想定」
 
 ## OSS の監視基盤 (`deploy/monitoring/`)
 

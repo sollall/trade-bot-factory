@@ -12,6 +12,33 @@ from tbf.worker.store import BotRow
 
 # cron は毎分。これより長く完了記録が更新されなければ止まっているとみなす
 STALE_MS = 3 * 60_000
+# 約定の質を集計する期間
+EXECUTION_WINDOW_MS = 30 * 86_400_000
+
+
+def execution_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, float]]:
+    """bot ごとの約定の質。
+    delay: 足の確定から発注までの秒数 / gap_bps: バックテストの約定価格との差 (約定代金で加重, + は不利) /
+    gap_usd: その差を金額にしたもの (バックテストより何ドル不利だったか)"""
+    by_bot: dict[str, list[Mapping[str, Any]]] = {}
+    for r in rows:
+        by_bot.setdefault(r["bot_id"], []).append(r)
+    out = {}
+    for bot_id, rs in by_bot.items():
+        delays = sorted(float(r["delay_ms"]) / 1000 for r in rs)
+        notional = [abs(float(r["qty"])) * float(r["bench_price"]) for r in rs]
+        total = sum(notional)
+        gap_usd = sum(float(r["gap_bps"]) / 10_000 * n for r, n in zip(rs, notional))
+        out[bot_id] = {
+            "fills": len(rs),
+            "delay_avg_sec": round(sum(delays) / len(delays), 2),
+            "delay_p95_sec": round(delays[min(len(delays) - 1, int(0.95 * len(delays)))], 2),
+            "delay_max_sec": round(delays[-1], 2),
+            "gap_bps": round(gap_usd / total * 10_000, 2) if total else 0.0,
+            "gap_usd": round(gap_usd, 4),
+            "notional_usd": round(total, 2),
+        }
+    return out
 
 
 def open_positions(row: Mapping[str, Any]) -> dict[str, float]:
@@ -65,6 +92,7 @@ def health(heartbeat: Optional[dict], now: int, bots: int, build: str) -> dict[s
         "age_sec": round(age / 1000, 1),
         "bots": bots,
         "last_tick_errors": int(heartbeat["errors"]),
+        "last_tick_lag_sec": round(int(heartbeat.get("lag_ms") or 0) / 1000, 1),
     }
     if not ok:
         out["reason"] = f"last tick {age // 1000}s ago"
@@ -104,6 +132,7 @@ def render_metrics(
     rows: Sequence[BotRow],
     heartbeat: Optional[dict],
     errors_1h: Mapping[str, int],
+    execution: Optional[Mapping[str, Mapping[str, float]]] = None,
 ) -> str:
     m = _Metrics(mode)
     m.add("tbf_build_info", "Deployed build (commit)", 1, build=build)
@@ -113,11 +142,19 @@ def render_metrics(
         m.add("tbf_heartbeat_age_seconds", "Seconds since last successful cron tick", (now - int(heartbeat["time"])) / 1000)
         m.add("tbf_last_tick_errors", "Bots that errored in the last tick", int(heartbeat["errors"]))
         m.add("tbf_last_tick_duration_seconds", "Duration of the last tick", int(heartbeat["duration_ms"]) / 1000)
+        m.add("tbf_last_tick_lag_seconds", "Delay from the scheduled cron time to the start of the last tick", int(heartbeat.get("lag_ms") or 0) / 1000)
 
     by_id = {r.bot_id: r for r in rows}
     for bot in bots:
         r = by_id.get(bot.id)
         m.add("tbf_bot_errors_1h", "Error events in the last hour", errors_1h.get(bot.id, 0), bot=bot.id)
+        ex = (execution or {}).get(bot.id)
+        if ex:
+            m.add("tbf_bot_exec_fills_30d", "Fills with execution-quality data (30d)", ex["fills"], bot=bot.id)
+            for stat in ("avg", "p95", "max"):
+                m.add("tbf_bot_exec_delay_seconds", "Candle close to order (30d)", ex[f"delay_{stat}_sec"], bot=bot.id, stat=stat)
+            m.add("tbf_bot_exec_gap_bps", "Fill price vs backtest assumption, notional-weighted, + is worse (30d)", ex["gap_bps"], bot=bot.id)
+            m.add("tbf_bot_exec_gap_usd_30d", "Cost vs backtest assumption in USD (30d)", ex["gap_usd"], bot=bot.id)
         if r is None:
             continue
         eq = r.equity(bot)

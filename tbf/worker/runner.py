@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import json
+import time
 import traceback
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from tbf.core.bot import Bot, Targets
 from tbf.core.execution import Order, Transfer, execute_targets
 from tbf.core.metrics import compute_metrics
-from tbf.core.portfolio import Portfolio, effective_leverage, equity, liquidate_venue, liquidated_venues, settle_funding
+from tbf.core.portfolio import Portfolio, effective_leverage, simulate_fill, equity, liquidate_venue, liquidated_venues, settle_funding
 from tbf.core.risk import check_risk, next_consecutive_losses
 from tbf.core.step import run_strategy, utc_day
 from tbf.core.types import HOUR, TIMEFRAME_MS, EquityPoint, Fill
 from tbf.market import VenueMarket
 from tbf.worker.brokers import Broker, OrderRequest
 from tbf.worker.notify import Notifier
-from tbf.worker.store import BotRow, Store
+from tbf.worker.store import BotRow, ExecInfo, Store
 
 # 戦略に渡すファンディング履歴の最短期間
 FUNDING_WINDOW_MS = 7 * 24 * HOUR
@@ -30,6 +31,8 @@ class Runtime:
     notifier: Notifier
     now: int
     notify_fills: bool = True
+    # 実時間 (ms)。now は cron の予定時刻なので、遅れの計測にはこちらを使う
+    clock: Callable[[], int] = lambda: int(time.time() * 1000)
 
 
 def bots_for_mode(bots: Sequence[Bot], mode: str) -> list[Bot]:
@@ -161,7 +164,8 @@ async def run_bot(bot: Bot, prices: dict[str, float], rt: Runtime) -> None:
                 reason = f"rebalance: {venue} leverage {lev:.2f}"
                 break
     if targets is not None:
-        await rebalance(bot, row, pf, prices, targets, reason, rt, candle=latest_closed)
+        bench = {a: cs[-1].close for a, cs in bars.items() if cs}
+        await rebalance(bot, row, pf, prices, targets, reason, rt, candle=latest_closed, bench=bench)
         return
     await save(bot, row, pf, prices, latest_closed, rt)
 
@@ -175,14 +179,17 @@ async def rebalance(
     reason: Optional[str],
     rt: Runtime,
     candle: Optional[int] = None,
+    bench: Optional[Mapping[str, float]] = None,
 ) -> None:
-    """目標まで売買して保存する"""
+    """目標まで売買して保存する。bench (銘柄ごとの判断時の終値) があれば約定の遅れとバックテストとの差を記録する"""
     was_flat = not pf.holdings
     seq = [0]
     order_ids: list[Optional[str]] = []
+    sent_at: list[int] = []
 
     async def fill_fn(o: Order) -> Optional[Fill]:
         seq[0] += 1
+        sent_at.append(rt.clock())
         res = await rt.broker.execute(
             OrderRequest(
                 bot_id=bot.id,
@@ -201,7 +208,10 @@ async def rebalance(
         return res.fill
 
     async def on_fill(f: Fill) -> None:
-        await rt.store.add_fill(bot.id, f, order_ids[-1] if order_ids else None, reason)
+        ex = None
+        if candle is not None and bench and bench.get(f.instrument) and sent_at:
+            ex = execution_info(bot, f, bench[f.instrument], sent_at[-1] - (candle + TIMEFRAME_MS[bot.timeframe]))
+        await rt.store.add_fill(bot.id, f, order_ids[-1] if order_ids else None, reason, ex)
 
     async def transfer_fn(t: Transfer) -> bool:
         if rt.mode == "paper":
@@ -284,11 +294,25 @@ async def daily_report(bots: Sequence[Bot], rt: Runtime) -> None:
             continue
         m = compute_metrics(await rt.store.equity(bot.id), await rt.store.fills(bot.id))
         eq = row.equity(bot)
-        lines.append(
+        line = (
             f"• {bot.id} [{row.status}] equity {eq:.2f} ({pct(eq / bot.capital - 1)}) "
             f"maxDD {pct(m.max_drawdown)} trades {m.trades} win {pct(m.win_rate)} sharpe {m.sharpe:.2f}"
         )
+        from tbf.worker.ops import EXECUTION_WINDOW_MS, execution_summary  # ops は store に依存するので遅延 import
+
+        ex = execution_summary(await rt.store.execution_rows(rt.now - EXECUTION_WINDOW_MS, bot.id)).get(bot.id)
+        if ex:
+            line += f" | 30d: 発注まで avg {ex['delay_avg_sec']:.1f}s p95 {ex['delay_p95_sec']:.1f}s, 対バックテスト {ex['gap_bps']:+.1f}bps"
+        lines.append(line)
     await rt.notifier.send("\n".join(lines))
+
+
+def execution_info(bot: Bot, f: Fill, bench_price: float, delay_ms: int) -> ExecInfo:
+    """バックテストなら bench_price (確定足の終値 ≒ 次の足の始値) に同じスリッページで約定していた。
+    実際の約定価格との差が、Workers の遅れ (と本番の実際のスリッページ) のコスト"""
+    expected = simulate_fill(f.instrument, f.side, f.qty, bench_price, f.time, bot.instruments[f.instrument].fees).price
+    sign = 1 if f.side == "buy" else -1
+    return ExecInfo(bench_price, delay_ms, sign * (f.price / expected - 1) * 10_000)
 
 
 def client_order_id(bot_id: str, time_ms: int, seq: int) -> str:

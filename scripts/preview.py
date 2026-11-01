@@ -120,6 +120,12 @@ def _pct(x: Optional[float]) -> str:
     return "-" if x is None else f"{x * 100:+.2f}%"
 
 
+def _exec(ex: Optional[dict]) -> str:
+    if not ex:
+        return "- | -"
+    return f"{ex['delay_avg_sec']:.1f}s / {ex['delay_p95_sec']:.1f}s | {ex['gap_bps']:+.1f}bps ({ex['gap_usd']:+.2f} USD)"
+
+
 def _rate(m: dict) -> str:
     return f"{m['win_rate'] * 100:.0f}%" if m.get("trades") and m.get("win_rate") is not None else "-"
 
@@ -148,16 +154,22 @@ def render_report(meta: dict, health: tuple[int, object], bots: tuple[int, objec
     bs, bb = bots
     if bs == 200 and isinstance(bb, list) and bb:
         lines += [
-            "| bot | 状態 | 資産 | リターン | 最大DD | シャープ | 取引 | 勝率 |",
-            "|---|---|---:|---:|---:|---:|---:|---:|",
+            "| bot | 状態 | 資産 | リターン | 最大DD | シャープ | 取引 | 勝率 | 発注まで (平均 / p95) | 対バックテスト |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
         for b in bb:
             m = b.get("metrics") or {}
             lines.append(
                 f"| `{b['id']}` | {b.get('status')} | {b.get('equity', 0):,.2f} | {_pct(m.get('total_return'))} | "
                 f"{_pct(-abs(m['max_drawdown'])) if 'max_drawdown' in m else '-'} | {m.get('sharpe', 0):.2f} | "
-                f"{m.get('trades', 0)} | {_rate(m)} |"
+                f"{m.get('trades', 0)} | {_rate(m)} | {_exec(b.get('execution'))} |"
             )
+        if any(b.get("execution") for b in bb):
+            lines += [
+                "",
+                "<sub>発注まで: 足の確定から発注までの秒数。対バックテスト: バックテストが仮定する約定価格"
+                " (確定足の終値 + 同じスリッページ) との差、+ は不利。直近 30 日</sub>",
+            ]
     elif bs:
         lines.append(f"成績を取得できませんでした (status {bs})")
     lines += ["", f"<sub>更新: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(now))}</sub>"]

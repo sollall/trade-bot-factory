@@ -32,6 +32,12 @@ groups:
         annotations:
           summary: "{{ $labels.mode }}/{{ $labels.bot }} の戦略が新しい足で動いていません"
 
+      - alert: ExecutionGapHigh
+        # バックテストより平均 10bps (Binance 現物の手数料 1 回分) 以上不利なら、Workers の遅延が効いている可能性
+        expr: tbf_bot_exec_gap_bps > 10 and tbf_bot_exec_fills_30d >= 10
+        annotations:
+          summary: "{{ $labels.mode }}/{{ $labels.bot }} の約定がバックテストより平均 {{ $value }}bps 不利です"
+
       - alert: UnmanagedPosition
         expr: tbf_unmanaged_position_qty != 0
         annotations:
