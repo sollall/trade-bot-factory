@@ -1,7 +1,7 @@
 """
 Cloudflare にアップロードする Python モジュールを .build/ に集める。
   - worker/entry.py   -> .build/entry.py
-  - tbf/ (backtest 以外) -> .build/tbf/
+  - tbf/ (backtest / arb / onchain 以外) -> .build/tbf/
   - bots/<id>/*.py    -> .build/bots/<id>/
   - bot_registry.py を生成 (Worker はファイル走査せずこの一覧から bot を読む)
 bot の import / 定義チェックもここで行うので、壊れた bot はデプロイ前に落ちる。
@@ -18,6 +18,7 @@ OUT = ROOT / ".build"
 sys.path.insert(0, str(ROOT))
 
 from tbf.registry import bot_ids, load_bot  # noqa: E402
+from tbf.worker.brokers import LIVE_SUPPORTED  # noqa: E402
 
 
 def copy_py(src: Path, dst: Path, skip: tuple[str, ...] = ()) -> None:
@@ -29,14 +30,27 @@ def copy_py(src: Path, dst: Path, skip: tuple[str, ...] = ()) -> None:
         shutil.copy2(f, dst / rel)
 
 
+def live_errors(bot) -> list[str]:
+    """本番発注に対応していない銘柄を live に出さない"""
+    if "live" not in bot.deploy:
+        return []
+    return [
+        f"bots/{bot.id}: {alias} ({inst}) は本番発注に未対応のため live にできません"
+        for alias, inst in bot.instruments.items()
+        if (inst.venue, inst.kind) not in LIVE_SUPPORTED
+    ]
+
+
 def main() -> None:
     ids = bot_ids()
     errors = []
     for i in ids:
         try:
-            load_bot(i)
+            bot = load_bot(i)
         except Exception as e:  # noqa: BLE001
             errors.append(f"bots/{i}: {type(e).__name__}: {e}")
+            continue
+        errors += live_errors(bot)
     if errors:
         sys.exit("\n".join(errors))
 
@@ -44,7 +58,7 @@ def main() -> None:
         shutil.rmtree(OUT)
     OUT.mkdir()
     shutil.copy2(ROOT / "worker" / "entry.py", OUT / "entry.py")
-    copy_py(ROOT / "tbf", OUT / "tbf", skip=("backtest",))
+    copy_py(ROOT / "tbf", OUT / "tbf", skip=("backtest", "arb", "onchain"))
     (OUT / "bots").mkdir()
     (OUT / "bots" / "__init__.py").write_text("")
     for i in ids:

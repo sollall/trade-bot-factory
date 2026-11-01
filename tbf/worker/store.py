@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, fields
-from typing import Optional
+from typing import Any, Optional
 
-from tbf.core.portfolio import Portfolio
+from tbf.core.bot import Bot
+from tbf.core.portfolio import Portfolio, holding_value
 from tbf.core.types import EquityPoint, Fill, Position
 from tbf.worker.db import DB
 
@@ -11,9 +13,6 @@ from tbf.worker.db import DB
 @dataclass
 class BotRow:
     bot_id: str
-    cash: float
-    qty: float
-    avg_price: float
     strategy_state: str
     # 最後に戦略を評価した確定足の開始時刻 (ms)
     last_candle: int
@@ -23,21 +22,50 @@ class BotRow:
     day: str
     day_start_equity: float
     consecutive_losses: int
-    last_price: Optional[float]
     updated_at: int
+    portfolio: Optional[str] = None
+    targets: Optional[str] = None
+    last_prices: Optional[str] = None
+    last_funding: int = 0
+    account_version: int = 0
+    # 1 銘柄時代の列 (portfolio が空のときの移行用)
+    cash: float = 0.0
+    qty: float = 0.0
+    avg_price: float = 0.0
 
-    @property
-    def portfolio(self) -> Portfolio:
-        return Portfolio(self.cash, Position(self.qty, self.avg_price))
+    def load_portfolio(self, bot: Bot) -> Portfolio:
+        if self.portfolio:
+            return Portfolio.from_json(json.loads(self.portfolio))
+        pf = Portfolio.initial(self.cash, bot.instruments[bot.primary].venue)
+        if self.qty:
+            pf.holdings[bot.primary] = Position(self.qty, self.avg_price)
+        return pf
 
-    def set_portfolio(self, p: Portfolio) -> None:
-        self.cash, self.qty, self.avg_price = p.cash, p.position.qty, p.position.avg_price
+    def set_portfolio(self, pf: Portfolio) -> None:
+        self.portfolio = json.dumps(pf.to_json())
 
-    def equity(self, price: Optional[float] = None) -> float:
-        return self.portfolio.equity(price if price is not None else (self.last_price or 0.0))
+    def prices(self) -> dict[str, float]:
+        return json.loads(self.last_prices) if self.last_prices else {}
 
-    def to_dict(self) -> dict:
-        return {f.name: getattr(self, f.name) for f in fields(self)}
+    def equity(self, bot: Bot, prices: Optional[dict[str, float]] = None) -> float:
+        """現在の資産評価額。価格が分からない銘柄は建値で評価する"""
+        pf = self.load_portfolio(bot)
+        px = {**self.prices(), **(prices or {})}
+        total = pf.total_cash
+        for alias, pos in pf.holdings.items():
+            inst = bot.instruments.get(alias)
+            if inst is not None:
+                total += holding_value(inst, pos, px.get(alias, pos.avg_price))
+        return total
+
+    def to_dict(self) -> dict[str, Any]:
+        d = {f.name: getattr(self, f.name) for f in fields(self)}
+        for k in ("portfolio", "targets", "last_prices", "strategy_state"):
+            if d.get(k):
+                d[k] = json.loads(d[k])
+        for k in ("cash", "qty", "avg_price"):
+            d.pop(k)
+        return d
 
 
 _COLS = {f.name for f in fields(BotRow)}
@@ -51,12 +79,14 @@ class Store:
     def __init__(self, db: DB) -> None:
         self.db = db
 
-    async def get_or_init(self, bot_id: str, capital: float, now: int) -> BotRow:
+    async def get_or_init(self, bot: Bot, now: int) -> BotRow:
+        pf = Portfolio.initial(bot.capital, bot.instruments[bot.primary].venue)
         await self.db.execute(
-            "INSERT OR IGNORE INTO bot_state (bot_id, cash, peak_equity, day_start_equity, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (bot_id, capital, capital, capital, now),
+            "INSERT OR IGNORE INTO bot_state (bot_id, cash, peak_equity, day_start_equity, updated_at, portfolio) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (bot.id, bot.capital, bot.capital, bot.capital, now, json.dumps(pf.to_json())),
         )
-        row = await self.get(bot_id)
+        row = await self.get(bot.id)
         assert row is not None
         return row
 
@@ -74,16 +104,20 @@ class Store:
     async def save_monitor(self, r: BotRow) -> None:
         """監視用フィールドだけ更新 (口座は触らないので並行実行でも安全)"""
         await self.db.execute(
-            "UPDATE bot_state SET peak_equity=?, day=?, day_start_equity=?, last_price=?, updated_at=? WHERE bot_id=?",
-            (r.peak_equity, r.day, r.day_start_equity, r.last_price, r.updated_at, r.bot_id),
+            "UPDATE bot_state SET peak_equity=?, day=?, day_start_equity=?, last_prices=?, updated_at=? WHERE bot_id=?",
+            (r.peak_equity, r.day, r.day_start_equity, r.last_prices, r.updated_at, r.bot_id),
         )
 
-    async def save_account(self, r: BotRow) -> None:
-        """口座と戦略状態を更新。claim_candle で処理権を取った実行 (または停止処理) だけが呼ぶ"""
-        await self.db.execute(
-            "UPDATE bot_state SET cash=?, qty=?, avg_price=?, strategy_state=?, consecutive_losses=?, updated_at=? WHERE bot_id=?",
-            (r.cash, r.qty, r.avg_price, r.strategy_state, r.consecutive_losses, r.updated_at, r.bot_id),
+    async def save_account(self, r: BotRow) -> bool:
+        """口座と戦略状態を更新。読み込んだ後に他の実行が口座を変えていたら False (上書きしない)"""
+        n = await self.db.execute(
+            "UPDATE bot_state SET portfolio=?, targets=?, strategy_state=?, consecutive_losses=?, last_funding=?, "
+            "updated_at=?, account_version=account_version+1 WHERE bot_id=? AND account_version=?",
+            (r.portfolio, r.targets, r.strategy_state, r.consecutive_losses, r.last_funding, r.updated_at, r.bot_id, r.account_version),
         )
+        if n > 0:
+            r.account_version += 1
+        return n > 0
 
     async def set_status(self, bot_id: str, status: str, reason: Optional[str]) -> None:
         await self.db.execute("UPDATE bot_state SET status=?, halt_reason=? WHERE bot_id=?", (status, reason, bot_id))
@@ -98,8 +132,9 @@ class Store:
 
     async def add_fill(self, bot_id: str, f: Fill, order_id: Optional[str], reason: Optional[str]) -> None:
         await self.db.execute(
-            "INSERT INTO fills (bot_id, time, side, qty, price, fee, realized_pnl, order_id, reason) VALUES (?,?,?,?,?,?,?,?,?)",
-            (bot_id, f.time, f.side, f.qty, f.price, f.fee, f.realized_pnl, order_id, reason),
+            "INSERT INTO fills (bot_id, time, side, qty, price, fee, realized_pnl, order_id, reason, instrument, reduce) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (bot_id, f.time, f.side, f.qty, f.price, f.fee, f.realized_pnl, order_id, reason, f.instrument, int(f.reduce)),
         )
 
     async def add_equity(self, bot_id: str, p: EquityPoint) -> None:
@@ -114,7 +149,10 @@ class Store:
 
     async def fills(self, bot_id: str, limit: int = 1000) -> list[Fill]:
         rows = await self.fill_rows(bot_id, limit)
-        return [Fill(r["time"], r["side"], r["qty"], r["price"], r["fee"], r["realized_pnl"]) for r in rows]
+        return [
+            Fill(r["time"], r["side"], r["qty"], r["price"], r["fee"], r["realized_pnl"], r.get("instrument") or "", bool(r.get("reduce")))
+            for r in rows
+        ]
 
     async def fill_rows(self, bot_id: str, limit: int = 1000) -> list[dict]:
         """古い順 (直近 limit 件)"""

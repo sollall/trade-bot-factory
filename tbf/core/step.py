@@ -1,49 +1,40 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional
 
-from tbf.core.bot import Bot, Context, normalize
-from tbf.core.portfolio import Portfolio, order_qty_for_target
-from tbf.core.types import Candle, Mode
-
-
-@dataclass(frozen=True)
-class StepResult:
-    # + 買い / - 売り / 0 なし (base 数量)
-    qty: float
-    target_exposure: Optional[float]
-    reason: Optional[str] = None
+from tbf.core.bot import Bot, Context, Targets, normalize_targets
+from tbf.core.portfolio import Portfolio, equity, weights
+from tbf.core.types import Candle, FundingPoint, Mode
 
 
 def run_strategy(
     bot: Bot,
-    candles: Sequence[Candle],
-    portfolio: Portfolio,
-    price: float,
+    time: int,
+    bars: Mapping[str, list[Candle]],
+    funding: Mapping[str, list[FundingPoint]],
+    pf: Portfolio,
+    prices: Mapping[str, float],
     state: dict[str, Any],
     mode: Mode,
-) -> StepResult:
+) -> tuple[Optional[Targets], Optional[str]]:
     """バックテスト・ペーパー・本番で共通の意思決定。state は戦略が書き換えうる"""
-    window = list(candles[-bot.lookback :])
-    mark = window[-1].close if window else price
     ctx = Context(
-        candles=window,
-        position=portfolio.position,
-        cash=portfolio.cash,
-        equity=portfolio.equity(mark),
+        time=time,
+        bars={a: list(bars.get(a, []))[-bot.lookback :] for a in bot.instruments},
+        funding_history={a: list(funding.get(a, [])) for a in bot.instruments if bot.instruments[a].is_perp},
+        holdings={a: p for a, p in pf.holdings.items()},
+        weights=weights(pf, bot.instruments, prices),
+        cash=pf.total_cash,
+        equity=equity(pf, bot.instruments, prices),
         params=bot.params,
         state=state,
         mode=mode,
+        instruments=dict(bot.instruments),
+        primary=bot.primary,
+        leverage=bot.leverage,
     )
-    decision = normalize(bot.strategy(ctx))
-    if decision is None:
-        return StepResult(0.0, None)
-    qty = order_qty_for_target(
-        portfolio, price, decision.target_exposure, bot.rebalance_threshold, bot.fees.cost_rate
-    )
-    return StepResult(qty, decision.target_exposure, decision.reason)
+    return normalize_targets(bot, bot.strategy(ctx))
 
 
 def utc_day(time_ms: int) -> str:

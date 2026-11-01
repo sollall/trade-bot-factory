@@ -1,0 +1,48 @@
+# チェーン間アビトラ (シャドーモード) の設定
+# 「base 通貨をチェーン A で売り、チェーン B で同量買い戻す」と純利益が出るかを監視する。
+# 両チェーンに在庫を置く前提なので、ブリッジは在庫の偏りを戻すときだけ (rebalance_bps で按分)。
+
+poll_interval_sec = 3.0
+# この純利益 (USD) を超えたら「機会」として記録する
+min_profit_usd = 1.0
+# 機会の偏りをブリッジで戻すコスト (取引額に対する bps) の見積もり
+rebalance_bps = 1.0
+# 機会がこのポーリング回数以上続いたら「捕まえられた可能性が高い」とみなす (report 用)
+min_persist_polls = 2
+
+[pair]
+base = "WETH"
+quote = "USDC"
+# 試す取引サイズ (base 通貨建て)
+sizes = [0.1, 0.5, 1.0, 3.0]
+
+# RPC は環境変数 ARB_RPC_<NAME 大文字> で上書きできる (例: ARB_RPC_ARBITRUM)。
+# 既定は公式の公開 RPC (レート制限あり)。本格運用では Alchemy 等のキーつき URL を推奨。
+# extra_fee_usd: L1 データ手数料などガス見積もりに含まれないコストの概算 (1 スワップあたり)
+
+[[chains]]
+name = "arbitrum"
+chain_id = 42161
+rpc = "https://arb1.arbitrum.io/rpc"
+quoter = "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"   # Uniswap V3 QuoterV2
+fee_tier = 500
+extra_fee_usd = 0.01
+tokens = { WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" }
+
+[[chains]]
+name = "base"
+chain_id = 8453
+rpc = "https://mainnet.base.org"
+quoter = "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
+fee_tier = 500
+extra_fee_usd = 0.02
+tokens = { WETH = "0x4200000000000000000000000000000000000006", USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }
+
+[[chains]]
+name = "optimism"
+chain_id = 10
+rpc = "https://mainnet.optimism.io"
+quoter = "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"
+fee_tier = 500
+extra_fee_usd = 0.02
+tokens = { WETH = "0x4200000000000000000000000000000000000006", USDC = "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85" }

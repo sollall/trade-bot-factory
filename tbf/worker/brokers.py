@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Optional, Protocol
 from urllib.parse import urlencode
 
+from tbf.core.instrument import Instrument
 from tbf.core.portfolio import simulate_fill
 from tbf.core.types import Fill, Side
 from tbf.http import Http
@@ -17,16 +18,15 @@ from tbf.http import Http
 @dataclass(frozen=True)
 class OrderRequest:
     bot_id: str
-    symbol: str
+    alias: str
+    instrument: Instrument
     side: Side
-    # base 数量
+    # 数量 (base 通貨)
     qty: float
     # 判断時の参照価格
     ref_price: float
     # 冪等キー (同じキーで二重発注しない)
     client_order_id: str
-    taker_rate: float
-    slippage_bps: float
     now: int
 
 
@@ -46,8 +46,32 @@ class PaperBroker:
     """現在価格 + スリッページ + 手数料で即時約定 (バックテストと同じモデル)"""
 
     async def execute(self, req: OrderRequest) -> BrokerFill:
-        f = simulate_fill(req.side, req.qty, req.ref_price, req.now, req.taker_rate, req.slippage_bps)
+        f = simulate_fill(req.alias, req.side, req.qty, req.ref_price, req.now, req.instrument.fees)  # type: ignore[arg-type]
         return BrokerFill(f, None)
+
+
+class UnsupportedBroker:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    async def execute(self, req: OrderRequest) -> Optional[BrokerFill]:
+        raise RuntimeError(f"{req.instrument}: {self.reason}")
+
+
+class RoutingBroker:
+    """銘柄の (取引所, 種類) ごとに発注先を振り分ける"""
+
+    def __init__(self, routes: dict[tuple[str, str], Broker], fallback: Broker) -> None:
+        self.routes = routes
+        self.fallback = fallback
+
+    async def execute(self, req: OrderRequest) -> Optional[BrokerFill]:
+        broker = self.routes.get((req.instrument.venue, req.instrument.kind), self.fallback)
+        return await broker.execute(req)
+
+
+# 本番 (live) で発注できる (取引所, 種類)。ここにないものを live にしようとするとビルドで止める
+LIVE_SUPPORTED: set[tuple[str, str]] = {("binance", "spot")}
 
 
 @dataclass(frozen=True)
@@ -84,7 +108,10 @@ class BinanceBroker:
         self.base_url = base_url
 
     async def execute(self, req: OrderRequest) -> Optional[BrokerFill]:
-        info = await self.symbol_info(req.symbol)
+        inst = req.instrument
+        if (inst.venue, inst.kind) != ("binance", "spot"):
+            raise RuntimeError(f"BinanceBroker cannot trade {inst}")
+        info = await self.symbol_info(inst.symbol)
         qty = floor_to_step(req.qty, info.step_size)
         if qty < info.min_qty or qty * req.ref_price < info.min_notional:
             return None
@@ -92,7 +119,7 @@ class BinanceBroker:
             "POST",
             "/api/v3/order",
             {
-                "symbol": req.symbol,
+                "symbol": inst.symbol,
                 "side": req.side.upper(),
                 "type": "MARKET",
                 "quantity": format_qty(qty, info.step_size),
@@ -154,5 +181,6 @@ def parse_order(res: dict, req: OrderRequest, info: SymbolInfo) -> Optional[Brok
     fee = quote_fee + base_fee * avg
     # BNB 等で払った場合は正確に換算できないので料率で見積もる
     if other_fee:
-        fee += quote * req.taker_rate
-    return BrokerFill(Fill(int(res["transactTime"]), req.side, net_qty, avg, fee), str(res["orderId"]))
+        fee += quote * req.instrument.fees.taker_rate  # type: ignore[union-attr]
+    fill = Fill(int(res["transactTime"]), req.side, net_qty, avg, fee, instrument=req.alias)
+    return BrokerFill(fill, str(res["orderId"]))

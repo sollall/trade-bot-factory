@@ -5,19 +5,21 @@ from __future__ import annotations
 import hmac
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Optional, Sequence
 from urllib.parse import parse_qs, urlparse
 
 from tbf.core.bot import Bot
 from tbf.core.metrics import compute_metrics
 from tbf.http import Http
-from tbf.market.binance import DEFAULT_MARKET_DATA_URL, BinanceMarket
-from tbf.worker.brokers import BinanceBroker, Broker, PaperBroker
+from tbf.market import VenueMarket, default_markets
+from tbf.market.binance import DEFAULT_MARKET_DATA_URL
+from tbf.market.hyperliquid import INFO_URL
+from tbf.worker.brokers import BinanceBroker, Broker, PaperBroker, RoutingBroker, UnsupportedBroker
 from tbf.worker.dashboard import BotSummary, render_dashboard
 from tbf.worker.db import DB
 from tbf.worker.notify import Notifier
-from tbf.worker.runner import Runtime, bots_for_mode, daily_report, halt, tick
+from tbf.worker.runner import Runtime, bots_for_mode, daily_report, fetch_prices, halt, tick
 from tbf.worker.store import Store
 
 DAILY_CRON = "5 0 * * *"
@@ -27,6 +29,7 @@ DAILY_CRON = "5 0 * * *"
 class Settings:
     mode: str
     market_data_url: str = DEFAULT_MARKET_DATA_URL
+    hyperliquid_url: str = INFO_URL
     binance_api_url: str = "https://api.binance.com"
     binance_api_key: Optional[str] = None
     binance_api_secret: Optional[str] = None
@@ -42,6 +45,7 @@ class Settings:
         return cls(
             mode=mode,
             market_data_url=get("MARKET_DATA_URL") or DEFAULT_MARKET_DATA_URL,
+            hyperliquid_url=get("HYPERLIQUID_URL") or INFO_URL,
             binance_api_url=get("BINANCE_API_URL") or "https://api.binance.com",
             binance_api_key=get("BINANCE_API_KEY"),
             binance_api_secret=get("BINANCE_API_SECRET"),
@@ -63,26 +67,37 @@ def _json(data: Any, status: int = 200) -> HttpResponse:
 
 
 class App:
-    def __init__(self, bots: Sequence[Bot], settings: Settings, db: DB, http: Http) -> None:
+    def __init__(
+        self,
+        bots: Sequence[Bot],
+        settings: Settings,
+        db: DB,
+        http: Http,
+        markets: Optional[dict[str, VenueMarket]] = None,
+    ) -> None:
         self.settings = settings
         self.bots = bots_for_mode(bots, settings.mode)
         self.store = Store(db)
         self.http = http
+        self.markets = markets or default_markets(http, settings.market_data_url, settings.hyperliquid_url)
 
     def _broker(self) -> Broker:
         s = self.settings
         if s.mode == "paper":
             return PaperBroker()
-        if not s.binance_api_key or not s.binance_api_secret:
-            raise RuntimeError("live mode requires BINANCE_API_KEY / BINANCE_API_SECRET secrets")
-        return BinanceBroker(self.http, s.binance_api_key, s.binance_api_secret, s.binance_api_url)
+        routes: dict[tuple[str, str], Broker] = {}
+        if s.binance_api_key and s.binance_api_secret:
+            routes[("binance", "spot")] = BinanceBroker(self.http, s.binance_api_key, s.binance_api_secret, s.binance_api_url)
+        else:
+            routes[("binance", "spot")] = UnsupportedBroker("BINANCE_API_KEY / BINANCE_API_SECRET が未設定です")
+        return RoutingBroker(routes, UnsupportedBroker("この取引所・種類の本番発注は未対応です"))
 
     def runtime(self, now: int) -> Runtime:
         s = self.settings
         return Runtime(
             mode=s.mode,
             store=self.store,
-            market=BinanceMarket(self.http, s.market_data_url),
+            markets=self.markets,
             broker=self._broker(),
             notifier=Notifier(self.http, s.webhook_url, s.mode),
             now=now,
@@ -115,14 +130,14 @@ class App:
         return BotSummary(
             bot=bot,
             row=row,
-            equity=row.equity() if row else bot.capital,
+            equity=row.equity(bot) if row else bot.capital,
             metrics=compute_metrics(curve, fills),
             curve=[p for p in curve if p.time >= now - 30 * 86_400_000],
         )
 
-    async def _price(self, bot: Bot) -> float:
-        prices = await BinanceMarket(self.http, self.settings.market_data_url).prices([bot.symbol])
-        return prices.get(bot.symbol, 0.0)
+    async def _prices(self, bot: Bot, now: int) -> dict[str, float]:
+        by_venue = await fetch_prices([bot], self.runtime(now))
+        return {a: by_venue.get(i.venue, {}).get(i.symbol, 0.0) for a, i in bot.instruments.items()}
 
     async def handle(self, method: str, url: str, headers: dict[str, str], now: Optional[int] = None) -> HttpResponse:
         now = now if now is not None else int(time.time() * 1000)
@@ -142,8 +157,15 @@ class App:
             out = []
             for b in self.bots:
                 s = await self._summary(b, now)
-                status = s.row.status if s.row else "pending"
-                out.append({"id": b.id, "symbol": b.symbol, "status": status, "equity": s.equity, "metrics": s.metrics.to_dict()})
+                out.append(
+                    {
+                        "id": b.id,
+                        "instruments": {a: str(i) for a, i in b.instruments.items()},
+                        "status": s.row.status if s.row else "pending",
+                        "equity": s.equity,
+                        "metrics": s.metrics.to_dict(),
+                    }
+                )
             return _json(out)
         if method == "POST" and parts[1:] == ["tick"]:
             await tick(self.bots, self.runtime(now))
@@ -163,10 +185,11 @@ class App:
                     {
                         "id": bot.id,
                         "description": bot.description,
-                        "symbol": bot.symbol,
+                        "instruments": {a: str(i) for a, i in bot.instruments.items()},
                         "timeframe": bot.timeframe,
+                        "leverage": bot.leverage,
                         "params": bot.params,
-                        "risk": bot.risk.__dict__,
+                        "risk": asdict(bot.risk),
                         "state": s.row.to_dict() if s.row else None,
                         "equity": s.equity,
                         "metrics": s.metrics.to_dict(),
@@ -175,16 +198,16 @@ class App:
                     }
                 )
             if method == "POST" and action == "halt":
-                await self.store.get_or_init(bot.id, bot.capital, now)
+                await self.store.get_or_init(bot, now)
                 flatten = (query.get("flatten") or [""])[0] == "true"
-                await halt(bot, "manual", flatten, await self._price(bot), self.runtime(now))
+                await halt(bot, "manual", flatten, await self._prices(bot, now), self.runtime(now))
                 return _json({"ok": True, "flatten": flatten})
             if method == "POST" and action == "resume":
                 row = await self.store.get(bot.id)
                 if not row:
                     return _json({"error": "bot has not run yet"}, 400)
-                price = await self._price(bot) or row.last_price or 0.0
-                await self.store.resume(bot.id, row.equity(price), now)
+                prices = {a: p for a, p in (await self._prices(bot, now)).items() if p > 0}
+                await self.store.resume(bot.id, row.equity(bot, prices), now)
                 await self.store.add_event(bot.id, "info", "resumed", now)
                 return _json({"ok": True})
         return _json({"error": "not found"}, 404)

@@ -1,0 +1,44 @@
+# /etc/systemd/system/arb-shadow.service (deploy/setup-server.sh が配置する)
+[Unit]
+Description=trade-bot-factory cross-chain arbitrage (shadow mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=arb
+Group=arb
+WorkingDirectory=/opt/trade-bot-factory
+# RPC URL や WEBHOOK_URL はここに書く (root だけ読める)
+EnvironmentFile=-/etc/arb/env
+ExecStart=/usr/bin/python3 -m tbf.arb run --config /opt/trade-bot-factory/arb.toml --db /var/lib/arb/arb.sqlite
+Restart=always
+RestartSec=10
+
+# ---- サンドボックス: 乗っ取られても被害を広げない ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+StateDirectory=arb
+ReadWritePaths=/var/lib/arb
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

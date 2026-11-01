@@ -2,15 +2,17 @@ import math
 
 import pytest
 
-from tbf import Bot, Decision, Fees, Risk
+from tbf import Bot, Decision, Fees, Risk, perp, spot
 from tbf.backtest.engine import backtest
 from tbf.core import indicators as ind
+from tbf.core.bot import normalize_targets
 from tbf.core.metrics import compute_metrics
-from tbf.core.portfolio import Portfolio, apply_fill, order_qty_for_target, simulate_fill
+from tbf.core.portfolio import Portfolio, apply_fill, equity, simulate_fill
 from tbf.core.risk import check_risk
 from tbf.core.types import Candle, EquityPoint, Fill, Position
 
 H = 3_600_000
+FREE = Fees(0, 0)
 
 
 def candles(closes):
@@ -20,31 +22,67 @@ def candles(closes):
 def make_bot(**kw):
     base = dict(
         id="bh", symbol="X", timeframe="1h", lookback=1, capital=1000,
-        risk=Risk(max_drawdown=None), fees=Fees(0, 0), strategy=lambda ctx: 1,
+        risk=Risk(max_drawdown=None), fees=FREE, strategy=lambda ctx: 1,
     )
     return Bot(**{**base, **kw})
 
 
-def test_buy_to_target_never_exceeds_cash_even_with_slippage():
-    p = Portfolio(1000)
-    qty = order_qty_for_target(p, 100, 1, 0.01, 0.0015)
-    after, _ = apply_fill(p, simulate_fill("buy", qty, 100, 0, 0.001, 5))
-    assert after.cash >= 0
-    assert after.position.qty == pytest.approx(qty)
+# ---- bot 定義 ----
+
+def test_symbol_shorthand_and_validation():
+    b = make_bot()
+    assert b.primary == "X" and b.instruments["X"].kind == "spot" and b.instruments["X"].fees == FREE
+    with pytest.raises(ValueError):
+        make_bot(id="Bad-Id")
+    with pytest.raises(ValueError):
+        make_bot(timeframe="2h")
+    with pytest.raises(ValueError):
+        make_bot(deploy=["prod"])
+    with pytest.raises(ValueError):
+        Bot(id="x", timeframe="1h", lookback=1, capital=1, strategy=lambda c: None)
 
 
-def test_close_all_realizes_pnl_net_of_fee():
-    p = Portfolio(0, Position(2, 100))
-    assert order_qty_for_target(p, 110, 0, 0.5, 0) == -2
-    after, fill = apply_fill(p, Fill(0, "sell", 2, 110, 1))
-    assert fill.realized_pnl == pytest.approx(19)
-    assert after.cash == pytest.approx(219)
-    assert after.position.qty == 0
+def test_normalize_targets():
+    b = Bot(id="m", instruments={"s": spot("A"), "p": perp("A")}, timeframe="1h", lookback=1, capital=1,
+            leverage=3, strategy=lambda c: None)
+    assert normalize_targets(b, None) == (None, None)
+    assert normalize_targets(b, 0.5)[0] == {"s": 0.5, "p": 0.0}
+    assert normalize_targets(b, {"p": -10})[0] == {"s": 0.0, "p": -3.0}  # 先物は ±leverage まで
+    assert normalize_targets(b, {"s": -1, "p": math.nan})[0] == {"s": 0.0, "p": 0.0}  # 現物はロングのみ
+    assert normalize_targets(b, Decision(weights={"s": 1}, reason="r")) == ({"s": 1.0, "p": 0.0}, "r")
+    with pytest.raises(ValueError):
+        normalize_targets(b, {"nope": 1})
 
 
-def test_small_rebalance_is_ignored():
-    assert order_qty_for_target(Portfolio(5, Position(9.95, 100)), 100, 1, 0.01, 0) == 0
+# ---- 口座計算 ----
 
+def test_spot_fill_accounting():
+    s = spot("A", fees=FREE)
+    pf = Portfolio.initial(1000, "binance")
+    apply_fill(pf, s, Fill(0, "buy", 2, 100, 1, instrument="a"))
+    assert pf.cash["binance"] == pytest.approx(799) and pf.holdings["a"] == Position(2, 100)
+    f = apply_fill(pf, s, Fill(0, "sell", 5, 110, 1, instrument="a"))  # 持っている分しか売れない
+    assert f.qty == 2 and f.reduce and f.realized_pnl == pytest.approx(19)
+    assert pf.cash["binance"] == pytest.approx(1018) and "a" not in pf.holdings
+
+
+def test_perp_fill_accounting_and_flip():
+    p = perp("A", fees=FREE)
+    pf = Portfolio(cash={"hyperliquid": 100})
+    apply_fill(pf, p, Fill(0, "sell", 1, 100, 0.1, instrument="p"))  # ショート
+    assert pf.cash["hyperliquid"] == pytest.approx(99.9)  # 先物は手数料だけ現金が動く
+    assert equity(pf, {"p": p}, {"p": 90}) == pytest.approx(109.9)
+    f = apply_fill(pf, p, Fill(0, "buy", 3, 90, 0, instrument="p"))  # 買い戻して 2 枚ロングへドテン
+    assert f.reduce and f.realized_pnl == pytest.approx(10)
+    assert pf.holdings["p"] == Position(2, 90)
+
+
+def test_simulated_fill_slippage():
+    f = simulate_fill("a", "buy", 1, 100, 0, Fees(0.001, 10))
+    assert f.price == pytest.approx(100.1) and f.fee == pytest.approx(0.1001)
+
+
+# ---- リスク・指標 ----
 
 def test_risk_checks():
     base = dict(equity=100, peak_equity=100, day_start_equity=100, consecutive_losses=0)
@@ -57,11 +95,11 @@ def test_risk_checks():
 def test_metrics():
     m = compute_metrics(
         [EquityPoint(0, 100), EquityPoint(H, 120), EquityPoint(2 * H, 90), EquityPoint(3 * H, 110)],
-        [Fill(0, "sell", 1, 1, 0, 5), Fill(1, "sell", 1, 1, 0, -2)],
+        [Fill(0, "sell", 1, 1, 0, 5, reduce=True), Fill(1, "buy", 1, 1, 0, -2, reduce=True), Fill(2, "buy", 1, 1, 0)],
     )
     assert m.max_drawdown == pytest.approx(0.25)
     assert m.total_return == pytest.approx(0.1)
-    assert m.win_rate == 0.5
+    assert m.trades == 2 and m.win_rate == 0.5
     assert m.profit_factor == pytest.approx(2.5)
     assert m.consecutive_losses == 1
 
@@ -73,6 +111,8 @@ def test_indicators():
     assert ind.ema([1, 1, 1, 1], 2) == 1
 
 
+# ---- 1 銘柄のバックテスト (従来の bot がそのまま動くこと) ----
+
 def test_backtest_executes_on_next_open():
     r = backtest(make_bot(), candles([100, 200, 200]))
     assert len(r.fills) == 1
@@ -83,11 +123,16 @@ def test_backtest_executes_on_next_open():
 def test_backtest_halts_and_flattens():
     r = backtest(make_bot(risk=Risk(max_drawdown=0.3)), candles([100, 100, 60, 60, 120]))
     assert "drawdown" in r.halted.reason
-    assert r.final.position.qty == 0
+    assert not r.final.holdings
     assert r.metrics.end_equity == pytest.approx(600)
 
 
-def test_strategy_state_persists_and_return_types():
+def test_buy_never_exceeds_cash_with_fees():
+    r = backtest(make_bot(fees=Fees(0.001, 5)), candles([100, 100, 100]))
+    assert r.final.cash["binance"] >= -1e-9
+
+
+def test_strategy_state_persists_and_nan_is_flat():
     seen = []
 
     def strat(ctx):
@@ -97,20 +142,11 @@ def test_strategy_state_persists_and_return_types():
 
     r = backtest(make_bot(strategy=strat), candles([1, 2, 3]))
     assert seen == [1, 2, 3]
-    assert r.fills == []  # NaN は 0 として扱われる
-
-
-def test_bot_validation():
-    with pytest.raises(ValueError):
-        make_bot(id="Bad-Id")
-    with pytest.raises(ValueError):
-        make_bot(timeframe="2h")
-    with pytest.raises(ValueError):
-        make_bot(deploy=["prod"])
+    assert r.fills == []
 
 
 def test_sample_bots_load():
     from tbf.registry import load_all
 
-    ids = [b.id for b in load_all()]
-    assert "sma_cross" in ids
+    ids = {b.id for b in load_all()}
+    assert {"sma_cross", "rsi_reversion", "eth_funding_carry", "eth_funding_hedged"} <= ids
