@@ -133,9 +133,12 @@ bot = Bot(
 ### 推奨フロー
 
 1. `python -m tbf.backtest --bot my_bot` で検証
-2. `deploy=["paper"]` で main に push → paper Worker で実データで検証
-3. ダッシュボードや日次レポートで成績を確認
-4. 良ければ `deploy=["paper", "live"]` にして push → 本番稼働 (GitHub Environment の承認を挟める)
+2. PR を作ってラベル `paper-trial` を付ける → その PR 専用の paper Worker で実データ検証が始まる
+   (push するたびにリセット。成績は毎日 PR にコメントされる)
+3. 良ければ `deploy=["paper", "live"]` (または `["paper"]` で main の paper で継続観察) にしてマージ → 本番稼働
+   (GitHub Environment の承認を挟める)。だめなら PR を閉じればお試し Worker も消える
+
+詳しくは [docs/ops.md](docs/ops.md)。
 
 ## ローカルバックテスト
 

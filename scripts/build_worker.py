@@ -55,8 +55,19 @@ def build_id() -> str:
         return "dev"
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--only", default="", help="ビルドに入れる bot id (カンマ区切り)。PR のお試し Worker 用")
+    args = ap.parse_args(argv)
     ids = bot_ids()
+    if args.only:
+        only = [x.strip() for x in args.only.split(",") if x.strip()]
+        unknown = sorted(set(only) - set(ids))
+        if unknown:
+            sys.exit(f"bots/ にない bot です: {', '.join(unknown)}")
+        ids = [i for i in ids if i in only]
     errors = []
     for i in ids:
         try:
