@@ -1,0 +1,54 @@
+# 運用監視スタック (すべて OSS)。VPS 1 台 (1 vCPU / 1〜2GB) で動く。
+#   Prometheus  : Worker の /metrics を 1 分ごとに収集・保存 (既定 90 日)
+#   Grafana     : ダッシュボード (grafana/dashboards/trade-bots.json を自動で読み込む)
+#   Uptime Kuma : /healthz の死活監視 → Discord / Slack / Telegram 等に通知 (設定は Web UI)
+# どれも 127.0.0.1 にだけ公開する。手元からは SSH トンネルで見る:
+#   ssh -L 3000:localhost:3000 -L 3001:localhost:3001 -L 9090:localhost:9090 <server>
+# 使い方は docs/ops.md
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=90d
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - 127.0.0.1:9090:9090
+
+  grafana:
+    image: grafana/grafana-oss:11.4.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - 127.0.0.1:3000:3000
+    depends_on:
+      - prometheus
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1.23.16
+    restart: unless-stopped
+    volumes:
+      - uptime-kuma-data:/app/data
+    ports:
+      - 127.0.0.1:3001:3001
+
+secrets:
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  uptime-kuma-data:

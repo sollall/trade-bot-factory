@@ -1,0 +1,38 @@
+# Prometheus の UI (Alerts) と Grafana で見える。通知まで飛ばすなら Alertmanager を足すか、
+# Grafana Alerting でこれと同じ式を使う。Worker 停止の検知は Uptime Kuma (/healthz) でも行う。
+groups:
+  - name: trade-bot
+    rules:
+      - alert: WorkerScrapeFailed
+        expr: up{job=~"trade-bot-.*"} == 0
+        for: 5m
+        annotations:
+          summary: "{{ $labels.job }} の /metrics が取得できません"
+
+      - alert: WorkerCronStalled
+        expr: tbf_heartbeat_age_seconds > 180
+        for: 2m
+        annotations:
+          summary: "{{ $labels.mode }} の cron が {{ $value | humanizeDuration }} 完了していません"
+
+      - alert: BotHalted
+        expr: tbf_bot_running == 0
+        annotations:
+          summary: "{{ $labels.mode }}/{{ $labels.bot }} が停止中です"
+
+      - alert: BotErrors
+        expr: tbf_bot_errors_1h >= 5
+        annotations:
+          summary: "{{ $labels.mode }}/{{ $labels.bot }} で直近 1 時間に {{ $value }} 回エラー"
+
+      - alert: BotStrategyNotRunning
+        # 最後に評価した足が足 3 本分より古い (通常は 1〜2 本分)。データ取得の失敗が続いているなど
+        expr: (time() - tbf_bot_last_candle_timestamp_seconds) > 3 * tbf_bot_timeframe_seconds and tbf_bot_running == 1
+        for: 10m
+        annotations:
+          summary: "{{ $labels.mode }}/{{ $labels.bot }} の戦略が新しい足で動いていません"
+
+      - alert: UnmanagedPosition
+        expr: tbf_unmanaged_position_qty != 0
+        annotations:
+          summary: "{{ $labels.mode }}: デプロイから外れた {{ $labels.bot }} に持ち高 {{ $labels.instrument }} が残っています"

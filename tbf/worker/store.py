@@ -167,6 +167,27 @@ class Store:
         )
         return [EquityPoint(r["time"], r["equity"]) for r in rows]
 
+    async def rows(self) -> list[BotRow]:
+        """DB にある全 bot の行 (今のデプロイに含まれない bot も含む)"""
+        return [_row(r) for r in await self.db.query("SELECT * FROM bot_state ORDER BY bot_id")]
+
+    async def error_counts(self, since: int) -> dict[str, int]:
+        rows = await self.db.query(
+            "SELECT bot_id, COUNT(*) AS n FROM events WHERE level='error' AND time >= ? AND bot_id IS NOT NULL GROUP BY bot_id",
+            (since,),
+        )
+        return {r["bot_id"]: int(r["n"]) for r in rows}
+
+    async def save_heartbeat(self, time: int, build: str, bots: int, errors: int, duration_ms: int) -> None:
+        await self.db.execute(
+            "INSERT OR REPLACE INTO heartbeat (name, time, build, bots, errors, duration_ms) VALUES ('tick',?,?,?,?,?)",
+            (time, build, bots, errors, duration_ms),
+        )
+
+    async def heartbeat(self) -> Optional[dict]:
+        rows = await self.db.query("SELECT * FROM heartbeat WHERE name='tick'")
+        return rows[0] if rows else None
+
     async def events(self, bot_id: Optional[str] = None, limit: int = 50) -> list[dict]:
         if bot_id:
             return await self.db.query("SELECT * FROM events WHERE bot_id=? ORDER BY id DESC LIMIT ?", (bot_id, limit))

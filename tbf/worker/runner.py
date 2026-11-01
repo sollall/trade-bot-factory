@@ -52,10 +52,11 @@ async def fetch_prices(bots: Sequence[Bot], rt: Runtime) -> dict[str, dict[str, 
     return out
 
 
-async def tick(bots: Sequence[Bot], rt: Runtime) -> None:
-    """cron 1 回分。全 bot を監視し、新しい確定足があれば戦略を実行する"""
+async def tick(bots: Sequence[Bot], rt: Runtime) -> int:
+    """cron 1 回分。全 bot を監視し、新しい確定足があれば戦略を実行する。エラーになった bot 数を返す"""
     if not bots:
-        return
+        return 0
+    errors = 0
     by_venue = await fetch_prices(bots, rt)
     for bot in bots:
         try:
@@ -67,10 +68,12 @@ async def tick(bots: Sequence[Bot], rt: Runtime) -> None:
                 prices[alias] = px
             await run_bot(bot, prices, rt)
         except Exception as e:  # noqa: BLE001  1 つの bot の失敗で他を止めない
+            errors += 1
             msg = f"{bot.id}: {type(e).__name__}: {e}"
             print(msg, traceback.format_exc())
             await rt.store.add_event(bot.id, "error", msg, rt.now)
             await rt.notifier.send(f":warning: error {msg}")
+    return errors
 
 
 async def run_bot(bot: Bot, prices: dict[str, float], rt: Runtime) -> None:

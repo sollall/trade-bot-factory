@@ -9,7 +9,9 @@ bot の import / 定義チェックもここで行うので、壊れた bot は�
 
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,6 +41,18 @@ def live_errors(bot) -> list[str]:
         for alias, inst in bot.instruments.items()
         if (inst.venue, inst.kind) not in LIVE_SUPPORTED
     ]
+
+
+def build_id() -> str:
+    """デプロイしたコミット。/healthz に出し、デプロイ後に新しい版が動いているかの確認に使う"""
+    if os.environ.get("GITHUB_SHA"):
+        return os.environ["GITHUB_SHA"]
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        return sha + ("-dirty" if dirty else "")
+    except (OSError, subprocess.CalledProcessError):
+        return "dev"
 
 
 def main() -> None:
@@ -71,6 +85,7 @@ def main() -> None:
     lines += [f"from bots.{i}.bot import bot as bot_{n}" for n, i in enumerate(ids)]
     lines += ["", f"BOTS = [{', '.join(f'bot_{n}' for n in range(len(ids)))}]", ""]
     (OUT / "bot_registry.py").write_text("\n".join(lines))
+    (OUT / "build_info.py").write_text(f"# 自動生成ファイル (scripts/build_worker.py)\nBUILD = {build_id()!r}\n")
     print(f"built .build/ with {len(ids)} bot(s): {', '.join(ids) or '(none)'}")
 
 

@@ -12,6 +12,7 @@ from pyodide.ffi import to_js
 from workers import Response, WorkerEntrypoint
 
 from bot_registry import BOTS
+from build_info import BUILD
 from tbf.worker.app import App, Settings
 
 
@@ -65,7 +66,7 @@ class Default(WorkerEntrypoint):
             value = getattr(self.env, key, None)
             return str(value) if value is not None else None
 
-        return App(BOTS, Settings.from_env(get), D1(self.env.DB), JsHttp())
+        return App(BOTS, Settings.from_env(get), D1(self.env.DB), JsHttp(), build=BUILD)
 
     async def scheduled(self, controller, env=None, ctx=None):
         await self._app().scheduled(str(controller.cron), int(controller.scheduledTime))
