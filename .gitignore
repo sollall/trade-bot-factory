@@ -4,7 +4,9 @@ node_modules/
 .venv/
 __pycache__/
 .pytest_cache/
-data/
+data/*
+# venues.toml は実行時データではなく会場レジストリ (設定) なので追跡する
+!data/venues.toml
 reports/
 .dev.vars
 wrangler.preview.toml

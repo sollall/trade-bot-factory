@@ -1,0 +1,172 @@
+# DEX↔DEX ファンディング裁定の候補会場レジストリ (TRA-9)
+#
+# 全項目、2026-11-03 に公開 API / 一次ドキュメントを実際に叩いて確認した値のみを記載する。
+# 確認できなかった項目は「キーを省略」し、report 側に unknown とその理由を書く。
+# 推定値・二次情報由来の値はこのファイルには入れない。
+#
+# 計測スナップショット: 2026-11-03T09:04:03Z (板の深さ・ファンディングは report 参照)
+# 根拠 URL は全て report ドキュメント側に記載。
+#
+# fee は bps (1bps = 0.01%)。funding_interval_hours は「ファンディングが決済される間隔」。
+#   注意: 会場によって「レートの建て」と「決済間隔」が違う。
+#   例) Paradex は 8h 建て/8h 決済、Extended/Lighter/Pacifica は 8h 建てを 1h ごとに決済、
+#       edgeX は 4h 建て/4h 決済。年率換算は report の換算表に従うこと。
+#
+# role:   "hedge"  = ヘッジ脚 (板が厚く、建玉を逃がせる)
+#         "points" = ポイント獲得目的の脚
+#         "both"   = どちらにも使える
+#         "excluded" = 今回の用途では使えない (理由は report)
+# jp_restriction: "none" は「一次情報の制限国リストに日本が無いことを確認した」の意味。
+#         法的助言ではない。採否判断はオーナーが行う。
+
+# =============================================================================
+# 基準会場 / ヘッジ脚の第一候補
+# =============================================================================
+[[venues]]
+name = "hyperliquid"
+role = "hedge"
+points_program = false          # HYPE は 2024-11 に TGE 済み。現行のポイント付与は未確認
+funding_interval_hours = 1      # 1h 建て・1h 決済 (predictedFundings の fundingIntervalHours=1 で確認)
+api_base = "https://api.hyperliquid.xyz"
+funding_endpoint = "POST /info {\"type\":\"fundingHistory\",\"coin\":\"BTC\",\"startTime\":<ms>}"
+orderbook_endpoint = "POST /info {\"type\":\"l2Book\",\"coin\":\"BTC\"}"
+auth_required = false
+rate_limit = "IP 単位で REST 合計 weight 1200/min。l2Book=2, fundingHistory=20(+20件ごと加算)"
+maker_fee_bps = 1.5
+taker_fee_bps = 4.5
+liquidation_fee_bps = 0         # 公式docs「there is no clearance fee on liquidations」
+symbols = ["BTC", "ETH", "SOL"]
+jp_restriction = "unknown"      # ToS が SPA でテキスト取得不能。IP geoblock は無し(JP から 200)
+notes = "板が最も厚い(BTC: 片側10bps内 $3-5M)。predictedFundings で Binance/Bybit の8h建てレートも同時取得でき、参照データ源としても有用"
+
+# =============================================================================
+# ポイント付与中とされていた候補 (実測で状況が異なるものは notes に明記)
+# =============================================================================
+[[venues]]
+name = "lighter"
+role = "both"
+points_program = false          # 要注意: LIT は 2025-12 に TGE 済み。Season1/2 は終了、Season3 未発表
+funding_interval_hours = 1      # 公式docs「Funding payments occur at each hour mark」
+api_base = "https://mainnet.zklighter.elliot.ai"
+funding_endpoint = "GET /api/v1/funding-rates (全会場の8h換算) / GET /api/v1/fundings?market_id=&resolution=1h (履歴)"
+orderbook_endpoint = "GET /api/v1/orderBookOrders?market_id=1&limit=100"
+auth_required = false
+rate_limit = "Standard/未認証は 60 req/min (IP単位)。認証すると L1 単位のみに。Plus/Premium は 24,000 weighted/min"
+maker_fee_bps = 0.0            # Standard Account は 0/0 (TWAP/RFQ のみ 1bp)
+taker_fee_bps = 0.0
+liquidation_fee_bps = 100      # 公式docs「takes up to 1% liquidation fee and sends it to LLP」
+symbols = ["BTC", "ETH", "SOL"]
+jp_restriction = "none"        # ToS 原文(42k字)に Japan の記載なし。制限は US/CA/UK/CN/KP/RU/UA/CU/IR/VE/SD/BY/MM/SY
+notes = "手数料0かつ板が厚い(BTC spread 0.01bps, 片側10bps内 $1.4-2.6M)。ファンディング差の受け皿として最有力。ただし未認証 60req/min がスキャナ設計の制約"
+
+[[venues]]
+name = "variational"
+role = "excluded"
+points_program = true          # ポイント/VAR は未 TGE。ただし下記のとおり板が無い
+funding_interval_hours = 8     # BTC-PERP/ETH-PERP は interval_seconds=28800。市場ごとに 1h/4h/8h 混在
+api_base = "https://omni-client-api.prod.ap-northeast-1.variational.io"
+funding_endpoint = "GET /metadata/v2/stats (listings[].funding)"
+orderbook_endpoint = "none"    # Omni は RFQ/OLP 方式。板そのものが存在しない
+auth_required = false
+rate_limit = "IP 10 req/10sec、全体 1000 req/min、超過で HTTP 429"
+symbols = ["BTC-PERP", "ETH-PERP"]
+jp_restriction = "unknown"
+notes = "除外推奨。(1)板が無く RFQ のみ (2)BTC/ETH のファンディングが 0.0001/8h に固定され 397市場が同じ年率 0.1095 = 差を取る対象にならない。ただし size_1k/100k/1m の提示値が取れるのでサイズ別コスト参照には使える"
+
+[[venues]]
+name = "extended"
+role = "hedge"
+points_program = false         # 要注意: 2026-10-06 時点で 70M中 69.2M 配布済、週次配布は終了。XTEN は既に稼働
+funding_interval_hours = 1     # 公式docs「funding payments are charged every hour」(レートは8h建て/8)
+api_base = "https://api.starknet.extended.exchange"
+funding_endpoint = "GET /api/v1/info/markets (marketStats.fundingRate) / GET /api/v1/info/{market}/funding?startTime=<ms>"
+orderbook_endpoint = "GET /api/v1/info/markets/BTC-USD/orderbook"
+auth_required = false
+rate_limit = "unknown"
+maker_fee_bps = 0.0
+taker_fee_bps = 2.5
+symbols = ["BTC-USD", "ETH-USD"]
+jp_restriction = "unknown"     # 制限国ページは ToS 参照と書くだけ、ToS 本文はテキスト化不能
+notes = "板が非常に厚い(BTC 2978/7258 levels, 片側10bps内 $3.6-3.9M)。status/active/isOffHours で市場停止が判定できる点が実装上有利。1h レートのキャップが 0.25%/h(group1-2)と高い"
+
+[[venues]]
+name = "paradex"
+role = "points"
+points_program = true          # DIME 稼働中だがポイント/報酬プログラムの原文は未確認
+funding_interval_hours = 8     # API の funding_interval_minutes=480
+api_base = "https://api.prod.paradex.trade"
+funding_endpoint = "GET /v1/markets/summary?market=BTC-USD-PERP (funding_rate) / GET /v1/funding/data?market=&page_size="
+orderbook_endpoint = "GET /v1/orderbook/BTC-USD-PERP?depth=20"
+auth_required = false
+rate_limit = "unknown"
+maker_fee_bps = 0.0            # retail は 0/0 (Pro/API は maker 0.3bps, taker 3.5-4.5bps)
+taker_fee_bps = 0.0
+symbols = ["BTC-USD-PERP", "ETH-USD-PERP"]
+jp_restriction = "none"        # restricted-persons 原文に日本なし。制限は US/CA + Cuba/Iran/DPRK/Syria + ウクライナ4地域
+notes = "警告: /v1/orderbook と /v1/markets/summary の BBO が同時刻で食い違う。ETH は orderbook 側で spread 26.6bps・10bps内 $0、summary 側は 2bps。板データを信用する前に要検証。OI も BTC 61.8枚と小さい"
+
+[[venues]]
+name = "pacifica"
+role = "points"
+points_program = true          # 2025-09-04 開始、週次 10M ポイント配布。TGE 未発表
+funding_interval_hours = 1     # 公式docs「Funding rates are updated every hour」(8h建て/8)
+api_base = "https://api.pacifica.fi"
+funding_endpoint = "GET /api/v1/info (funding_rate) / GET /api/v1/funding_rate/history?symbol=BTC&limit=3"
+orderbook_endpoint = "GET /api/v1/book?symbol=BTC"
+auth_required = false
+rate_limit = "unknown"
+maker_fee_bps = 1.5            # Tier1 (30日出来高 0)
+taker_fee_bps = 4.0
+symbols = ["BTC", "ETH"]
+jp_restriction = "unknown"
+notes = "板は中程度(片側10bps内 $0.25-0.39M、10 levels)。ポイント式は「dynamic and opaque by design」と公式に明記され事前計算は不可能。自己売買・sybil は対象外と明記"
+
+[[venues]]
+name = "hibachi"
+role = "points"
+points_program = true          # 週次 1M ポイント/epoch、月曜3:00UTC 配布。TGE 未発表
+funding_interval_hours = 1     # 公式docs「funding payments are made every hour」(レートは mean(ρ)/8)
+api_base = "https://data-api.hibachi.xyz"
+funding_endpoint = "GET /market/data/prices?symbol=BTC/USDT-P (fundingRateEstimation)"
+orderbook_endpoint = "GET /market/data/orderbook?symbol=BTC/USDT-P&depth=30&granularity=1"
+auth_required = false
+rate_limit = "unknown"
+maker_fee_bps = 0.0            # Tier1 (14日出来高 0)
+taker_fee_bps = 4.5
+symbols = ["BTC/USDT-P", "ETH/USDT-P"]
+jp_restriction = "unknown"
+notes = "上場 15 銘柄のみ。exchange-info の status と maintenanceWindow で計画停止が取れる(観測時 1793728800-1793736000 に停止予定あり)。入出金コストが明示的: depositFees 0.006761 / withdrawalFees 0.018030 / 即時出金は段階制。ETH 板は薄い(10bps内 $33-42k)"
+
+# =============================================================================
+# 参考 (TGE 済み・比較用)
+# =============================================================================
+[[venues]]
+name = "edgex"
+role = "hedge"
+points_program = false         # EDGE トークン稼働中
+funding_interval_hours = 4     # API の fundingRateIntervalMin=240
+api_base = "https://edgex-prod-v2.edgex.exchange"
+funding_endpoint = "GET /api/v2/public/funding/getLatestFundingRate?contractId=30000001"
+orderbook_endpoint = "GET /api/v2/public/quote/getDepth?contractId=30000001&level=15"
+auth_required = false
+rate_limit = "unknown"
+maker_fee_bps = 4.0
+taker_fee_bps = 4.5
+liquidation_fee_bps = 100      # contractList.liquidateFeeRate = 0.01
+symbols = ["BTCUSDC", "ETHUSDC"]
+jp_restriction = "unknown"
+notes = "板は厚い(BTC spread 0.01bps, 10bps内 $1.3-2.1M)が手数料が高い(maker 4bps)。観測時 BTC/ETH ともファンディングが負(-5.3e-05/4h)で他会場と逆符号 = 差を取る対象になりうる。公式docsの contractId=10000001 は存在せず実際は 30000001"
+
+[[venues]]
+name = "dydx"
+role = "hedge"
+points_program = false         # DYDX は TGE 済み
+funding_interval_hours = 1     # perpetualMarkets の nextFundingRate は1h建て
+api_base = "https://indexer.dydx.trade"
+funding_endpoint = "GET /v4/perpetualMarkets?ticker=BTC-USD (nextFundingRate)"
+orderbook_endpoint = "GET /v4/orderbooks/perpetualMarket/BTC-USD"
+auth_required = false
+rate_limit = "unknown"
+symbols = ["BTC-USD", "ETH-USD"]
+jp_restriction = "unknown"
+notes = "手数料は一次情報未確認のため省略。status=ACTIVE を API で判定可能。BTC の板は他会場より薄い(spread 1.7bps)"
