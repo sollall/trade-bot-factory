@@ -71,7 +71,12 @@ jobs:
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/$1"
           }
           VERIFY=$(api "user/tokens/verify")
-          VSTATUS=$(jq -r '.result.status // "n/a"' "$RUNNER_TEMP/body.json" 2>/dev/null || echo parse-error)
+          VSTATUS=$(jq -r 'if .result.status then .result.status else ((.errors // [])[0].code // "n/a" | tostring) end' "$RUNNER_TEMP/body.json" 2>/dev/null || echo parse-error)
+
+          # user スコープの 401 はアカウント所有トークンでも起きる。account スコープでも確認する
+          AVERIFY=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")
+          AVSTATUS=$(jq -r 'if .result.status then .result.status else ((.errors // [])[0].code // "n/a" | tostring) end' "$RUNNER_TEMP/body.json" 2>/dev/null || echo parse-error)
+          ACCT=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID")
 
           D1=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database?per_page=100")
           D1N=$(jq -r '(.result // []) | length' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
@@ -84,9 +89,9 @@ jobs:
           SUBOK=$(jq -r 'if (.result.subdomain // "") != "" then "yes" else "no" end' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
           rm -f "$RUNNER_TEMP/body.json"
 
-          D="verify=$VERIFY/$VSTATUS d1=$D1(n=$D1N,paper=$D1PAPER) workers=$WK(n=$WKN) subdomain=$SUB(set=$SUBOK)"
+          D="verify user=$VERIFY/$VSTATUS acct=$AVERIFY/$AVSTATUS acctread=$ACCT | d1=$D1(n=$D1N,paper=$D1PAPER) workers=$WK(n=$WKN) subdomain=$SUB(set=$SUBOK)"
           echo "$D" | tee -a "$GITHUB_STEP_SUMMARY"
-          STATE=success; [ "$VERIFY" = "200" ] || STATE=failure
+          STATE=success; { [ "$VERIFY" = "200" ] || [ "$AVERIFY" = "200" ]; } || STATE=failure
           gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -f state=$STATE -f context=preflight/cloudflare -f description="$D" >/dev/null
 
