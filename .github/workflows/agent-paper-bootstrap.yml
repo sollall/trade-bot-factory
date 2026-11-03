@@ -1,0 +1,129 @@
+# 常設 paper Worker の一度きりの初回起動 (手元で wrangler login する方式B の代わり)。
+# ボタンから手で起動する workflow_dispatch のみ。自動では絶対に走らない。
+#
+# やること: paper の D1 を1つ用意 → migration → paper Worker をデプロイ → /healthz で確認
+#
+# live に触らないための歯止め (口約束ではなくコードで):
+#   - wrangler に渡す --env は paper 固定。live という文字列をコマンドに一度も渡さない
+#   - wrangler.toml の [env.paper] の database_id だけを置換し、置換が1件でなければ異常終了
+#   - 実行前と書き込み後に [env.live] がプレースホルダのままかを検査し、違えば中止
+#   - wrangler.toml はコミットしない (実行時に D1 を引き当てて書き換えるだけ)。
+#     つまり live のプレースホルダは main に残り続け、deploy.yml の check は今後も落ちたままになる
+#     = main へのマージが live を自動デプロイすることはない
+#
+# 冪等: すでに trade-bot-paper の D1 があれば作らずに再利用する。何度流しても増えない。
+name: Agent paper bootstrap (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      gh_environment:
+        description: "Cloudflare secret が置かれている GitHub Environment (repository secret なら preview のままで可)"
+        type: choice
+        options: [preview, paper]
+        default: preview
+      confirm:
+        description: 'paper Worker を実際にデプロイします。続けるなら deploy-paper と入力'
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: agent-paper-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.gh_environment }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PAPER_ADMIN_TOKEN: ${{ secrets.PAPER_ADMIN_TOKEN }}
+      PREVIEW_ADMIN_TOKEN: ${{ secrets.PREVIEW_ADMIN_TOKEN }}
+      DB_NAME: trade-bot-paper
+      PLACEHOLDER: '00000000-0000-0000-0000-000000000000'
+    steps:
+      - name: Check confirmation phrase
+        run: |
+          [ "${{ inputs.confirm }}" = "deploy-paper" ] || {
+            echo "::error::confirm に deploy-paper と入力してください (実際にデプロイする操作です)"; exit 1; }
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+
+      - name: Check required secrets
+        run: |
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "::error::CLOUDFLARE_API_TOKEN がこの文脈で見えません"; exit 1; }
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "::error::CLOUDFLARE_ACCOUNT_ID がこの文脈で見えません"; exit 1; }
+          if [ -z "$PAPER_ADMIN_TOKEN" ] && [ -z "$PREVIEW_ADMIN_TOKEN" ]; then
+            echo "::error::ダッシュボード/API の認証に使う token がありません。repository secret PAPER_ADMIN_TOKEN を登録してください (openssl rand -hex 32)"
+            exit 1
+          fi
+
+      - name: Assert live is still a placeholder (before)
+        run: python scripts/paper_bootstrap.py assert-live --placeholder "$PLACEHOLDER"
+
+      - run: python scripts/build_worker.py
+
+      - name: Ensure paper D1 exists (idempotent)
+        run: |
+          DB_ID=$(npx wrangler d1 list --json | jq -r --arg n "$DB_NAME" '.[] | select(.name == $n) | .uuid' | head -n1)
+          if [ -z "$DB_ID" ]; then
+            echo "D1 $DB_NAME を作成します"
+            npx wrangler d1 create "$DB_NAME" >/dev/null
+            DB_ID=$(npx wrangler d1 list --json | jq -r --arg n "$DB_NAME" '.[] | select(.name == $n) | .uuid' | head -n1)
+          else
+            echo "D1 $DB_NAME は既にあるので再利用します"
+          fi
+          [ -n "$DB_ID" ] || { echo "::error::D1 $DB_NAME の id を取得できませんでした"; exit 1; }
+          echo "::add-mask::$DB_ID"
+          echo "DB_ID=$DB_ID" >> "$GITHUB_ENV"
+
+      - name: Write database_id into [env.paper] only (not committed)
+        run: python scripts/paper_bootstrap.py patch --db-id "$DB_ID" --placeholder "$PLACEHOLDER"
+
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply "$DB_NAME" --env paper --remote
+
+      - name: Deploy paper worker
+        id: deploy
+        run: |
+          TOKEN="${PAPER_ADMIN_TOKEN:-$PREVIEW_ADMIN_TOKEN}"
+          jq -n --arg t "$TOKEN" '{ADMIN_TOKEN: $t}' > "$RUNNER_TEMP/secrets.json"
+          npx wrangler deploy --env paper --secrets-file "$RUNNER_TEMP/secrets.json" \
+            --message "paper bootstrap ${GITHUB_SHA::12}"
+          rm -f "$RUNNER_TEMP/secrets.json"
+          SUB=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r .result.subdomain)
+          [ -n "$SUB" ] && [ "$SUB" != "null" ] || { echo "::error::workers.dev のサブドメインを取得できませんでした"; exit 1; }
+          echo "URL=https://trade-bot-paper.$SUB.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Assert live is still a placeholder (after)
+        if: always()
+        run: python scripts/paper_bootstrap.py assert-live --placeholder "$PLACEHOLDER"
+
+      - name: Verify cron completed on the new version
+        run: python scripts/deploy_guard.py verify --url "$URL" --build "$GITHUB_SHA" --timeout 420
+
+      - name: Publish the worker URL (commit status)
+        if: always() && env.URL != ''
+        run: |
+          CODE=$(curl -sS -o "$RUNNER_TEMP/h.json" -w '%{http_code}' "$URL/healthz" || echo 000)
+          AGE=$(jq -r '.age_sec // "n/a"' "$RUNNER_TEMP/h.json" 2>/dev/null || echo parse-error)
+          BOTS=$(jq -r '.bots // "n/a"' "$RUNNER_TEMP/h.json" 2>/dev/null || echo n/a)
+          D="$URL healthz=$CODE age_sec=$AGE bots=$BOTS"
+          echo "$D" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$CODE" = "200" ] && S=success || S=failure
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=$S -f context=paper-bootstrap/healthz -f description="$D" >/dev/null
