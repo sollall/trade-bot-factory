@@ -4,7 +4,12 @@ node_modules/
 .venv/
 __pycache__/
 .pytest_cache/
-data/
+# data/ はバックテスト用の取得データと sqlite の置き場。
+# 会場レジストリ data/venues.toml だけは設定なので追跡する (`data/` 全体を無視すると
+# git がディレクトリに降りず否定パターンが効かないので `data/*` にしてある)
+data/*
+!data/venues.toml
 reports/
+logs/
 .dev.vars
 wrangler.preview.toml

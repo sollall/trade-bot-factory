@@ -1,0 +1,49 @@
+# /etc/systemd/system/funding-shadow.service
+# DEX 間ファンディング・スクリーナー (シャドーモード)。売買しないので秘密鍵も API キーも持たない。
+# arb-shadow.service と同じサンドボックス。EnvironmentFile は Webhook の設定だけ。
+[Unit]
+Description=trade-bot-factory cross-DEX funding screener (shadow mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=arb
+Group=arb
+WorkingDirectory=/opt/trade-bot-factory
+# WEBHOOK_URL / FUNDING_URL_<VENUE> はここに書く (root だけ読める)
+EnvironmentFile=-/etc/arb/funding-env
+ExecStartPre=/usr/bin/python3 -m tbf.funding check --config /opt/trade-bot-factory/funding.toml
+ExecStart=/usr/bin/python3 -m tbf.funding run \
+  --config /opt/trade-bot-factory/funding.toml \
+  --db /var/lib/funding/funding.sqlite
+Restart=always
+RestartSec=30
+
+# ---- サンドボックス: 乗っ取られても被害を広げない ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+StateDirectory=funding
+ReadWritePaths=/var/lib/funding
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
