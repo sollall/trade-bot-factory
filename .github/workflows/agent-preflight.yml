@@ -85,11 +85,14 @@ jobs:
           WK=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts")
           WKN=$(jq -r '(.result // []) | length' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
 
+          # サブドメイン名は公開ホスト名 (*.workers.dev) なので秘密ではない。
+          # preview.yml が PR に貼る URL と同じ値で、ここで出しておくと /healthz を外から確認できる。
           SUB=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")
-          SUBOK=$(jq -r 'if (.result.subdomain // "") != "" then "yes" else "no" end' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
+          SUBNAME=$(jq -r '.result.subdomain // ""' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "")
+          SUBOK=$([ -n "$SUBNAME" ] && echo yes || echo no)
           rm -f "$RUNNER_TEMP/body.json"
 
-          D="verify user=$VERIFY/$VSTATUS acct=$AVERIFY/$AVSTATUS acctread=$ACCT | d1=$D1(n=$D1N,paper=$D1PAPER) workers=$WK(n=$WKN) subdomain=$SUB(set=$SUBOK)"
+          D="verify user=$VERIFY/$VSTATUS acct=$AVERIFY/$AVSTATUS acctread=$ACCT | d1=$D1(n=$D1N,paper=$D1PAPER) workers=$WK(n=$WKN) subdomain=$SUB(set=$SUBOK,name=${SUBNAME:--})"
           echo "$D" | tee -a "$GITHUB_STEP_SUMMARY"
           STATE=success; { [ "$VERIFY" = "200" ] || [ "$AVERIFY" = "200" ]; } || STATE=failure
           gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
