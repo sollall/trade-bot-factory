@@ -86,6 +86,10 @@ class Spread:
     exit_cost_bps: float
     short_apr: float
     long_apr: float
+    # 入った瞬間の 2 会場の価格差 (bps)。+ なら安い会場をショート / 高い会場をロングした状態 = 含み損。
+    # 依頼票の実効スプレッドの式には入っていないので net_apr には含めず、別に記録して報告する。
+    # 解消時の価格差が入ったときと同じなら相殺されるが、同じである保証はない。
+    basis_bps: float = 0.0
 
     @property
     def cost_bps(self) -> float:
@@ -146,6 +150,8 @@ def evaluate(
                     continue
                 short_apr = sa.symbols[sym].funding_apr
                 long_apr = sb.symbols[sym].funding_apr
+                short_px, long_px = sa.symbols[sym].ref_price, sb.symbols[sym].ref_price
+                basis = (long_px - short_px) / short_px * BPS if short_px > 0 else 0.0
                 for size in cfg.sizes_usd:
                     ca, cb = costs[(a.name, sym, size)], costs[(b.name, sym, size)]
                     if not ca.ok or not cb.ok:
@@ -165,6 +171,7 @@ def evaluate(
                             exit_cost_bps=exit_,
                             short_apr=short_apr,
                             long_apr=long_apr,
+                            basis_bps=basis,
                         )
                     )
     return spreads, misses

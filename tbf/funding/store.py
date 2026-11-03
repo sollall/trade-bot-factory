@@ -54,6 +54,16 @@ CREATE TABLE IF NOT EXISTS depth_misses (
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
+# 計測中の DB に後から足す列。計測を midway でやり直したくないので追加のみ
+# (arb / worker 側の migration と同じ方針)。既に回っている sqlite にも安全に当たる。
+ADDED_COLUMNS = {
+    "spread_buckets": [
+        ("sum_basis_bps", "REAL NOT NULL DEFAULT 0"),
+        ("min_basis_bps", "REAL NOT NULL DEFAULT 0"),
+        ("max_basis_bps", "REAL NOT NULL DEFAULT 0"),
+    ],
+}
+
 
 class FundingStore:
     def __init__(self, path: str | Path, bucket_sec: float = 300.0) -> None:
@@ -62,6 +72,15 @@ class FundingStore:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        for table, columns in ADDED_COLUMNS.items():
+            have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns:
+                if name not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        self.conn.commit()
 
     def bucket(self, time: int) -> int:
         return time // self.bucket_ms * self.bucket_ms
@@ -96,19 +115,27 @@ class FundingStore:
         )
 
     def add_spread(self, time: int, s: Spread) -> None:
-        cost = s.cost_bps
+        cost, basis = s.cost_bps, s.basis_bps
+        # 列を後から足せるように、位置ではなく列名で入れる
         self.conn.execute(
-            """INSERT INTO spread_buckets VALUES (?,?,?,?,?,1,?,?,?,?,?,?)
+            """INSERT INTO spread_buckets
+                 (bucket, short_venue, long_venue, symbol, size_usd, n,
+                  sum_gross, min_gross, max_gross, sum_cost_bps, min_cost_bps, max_cost_bps,
+                  sum_basis_bps, min_basis_bps, max_basis_bps)
+               VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)
                ON CONFLICT (bucket, short_venue, long_venue, symbol, size_usd) DO UPDATE SET
                  n = n + 1,
                  sum_gross = sum_gross + excluded.sum_gross,
                  min_gross = MIN(min_gross, excluded.min_gross), max_gross = MAX(max_gross, excluded.max_gross),
                  sum_cost_bps = sum_cost_bps + excluded.sum_cost_bps,
                  min_cost_bps = MIN(min_cost_bps, excluded.min_cost_bps),
-                 max_cost_bps = MAX(max_cost_bps, excluded.max_cost_bps)""",
+                 max_cost_bps = MAX(max_cost_bps, excluded.max_cost_bps),
+                 sum_basis_bps = sum_basis_bps + excluded.sum_basis_bps,
+                 min_basis_bps = MIN(min_basis_bps, excluded.min_basis_bps),
+                 max_basis_bps = MAX(max_basis_bps, excluded.max_basis_bps)""",
             (
                 self.bucket(time), s.short_venue, s.long_venue, s.symbol, s.size_usd,
-                s.gross_apr, s.gross_apr, s.gross_apr, cost, cost, cost,
+                s.gross_apr, s.gross_apr, s.gross_apr, cost, cost, cost, basis, basis, basis,
             ),
         )
 

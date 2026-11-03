@@ -73,6 +73,10 @@ class PairStat:
     avg_cost_bps: float
     min_cost_bps: float
     max_cost_bps: float
+    # 入った瞬間の 2 会場の価格差 (bps)。net_apr には含めていない
+    avg_basis_bps: float = 0.0
+    min_basis_bps: float = 0.0
+    max_basis_bps: float = 0.0
 
     @property
     def label(self) -> str:
@@ -89,7 +93,8 @@ class PairStat:
 def pair_stats(store: FundingStore, since: int, until: int, size_usd: Optional[float] = None) -> list[PairStat]:
     sql = """SELECT short_venue, long_venue, symbol, size_usd, SUM(n) n,
                     SUM(sum_gross)/SUM(n) avg_gross, MIN(min_gross) min_gross, MAX(max_gross) max_gross,
-                    SUM(sum_cost_bps)/SUM(n) avg_cost, MIN(min_cost_bps) min_cost, MAX(max_cost_bps) max_cost
+                    SUM(sum_cost_bps)/SUM(n) avg_cost, MIN(min_cost_bps) min_cost, MAX(max_cost_bps) max_cost,
+                    SUM(sum_basis_bps)/SUM(n) avg_basis, MIN(min_basis_bps) min_basis, MAX(max_basis_bps) max_basis
              FROM spread_buckets WHERE bucket >= ? AND bucket < ?"""
     params: tuple = (since, until)
     if size_usd is not None:
@@ -100,6 +105,7 @@ def pair_stats(store: FundingStore, since: int, until: int, size_usd: Optional[f
         PairStat(
             r["short_venue"], r["long_venue"], r["symbol"], r["size_usd"], r["n"],
             r["avg_gross"], r["min_gross"], r["max_gross"], r["avg_cost"], r["min_cost"], r["max_cost"],
+            r["avg_basis"], r["min_basis"], r["max_basis"],
         )
         for r in store.query(sql, params)
     ]
@@ -310,6 +316,17 @@ def build_report(store: FundingStore, cfg: FundingConfig, since: int, until: Opt
         L.append(_row(list(zip(
             [s.label, s.symbol, _pct(s.net(hold)), _pct(s.avg_gross), _pct(s.min_gross), _pct(s.max_gross),
              f"{s.avg_cost_bps:.2f}", _days(s.breakeven), str(n_ep), _hours(longest), str(s.n)], w1))))
+
+    # ---- 1b. 会場間の価格差 (net_apr に含めていないので別建てで出す)
+    L.append(f"\n== 1b. 入った瞬間の会場間の価格差 (片脚 ${ref:,.0f}) — net_apr には含めていません")
+    L.append("+ は「安い会場をショート / 高い会場をロング」= 建てた瞬間の含み損。解消時の価格差が同じなら相殺される")
+    wb = [32, 5, -10, -10, -10, -14]
+    L.append(_row(list(zip(["ショート / ロング", "銘柄", "価格差 avg", "min", "max", "往復bps との比"], wb))))
+    for s in stats[:10]:
+        ratio = f"{s.avg_basis_bps / s.avg_cost_bps:.2f}x" if s.avg_cost_bps else "n/a"
+        L.append(_row(list(zip(
+            [s.label, s.symbol, f"{s.avg_basis_bps:+.2f}", f"{s.min_basis_bps:+.2f}",
+             f"{s.max_basis_bps:+.2f}", ratio], wb))))
 
     # ---- 2. 保有期間別
     L.append(f"\n== 2. 保有期間別の net_apr (片脚 ${ref:,.0f}, 上位 8 ペア)")

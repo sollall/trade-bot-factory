@@ -223,6 +223,53 @@ def test_effective_spread_breakeven_and_net_apr():
     assert r.net_apr(14) < 0
 
 
+def test_basis_is_measured_but_kept_out_of_net_apr():
+    """会場間の価格差は記録するが、依頼票の実効スプレッドの式には入れない"""
+    cfg, _, _ = cfg_and_client()
+    cfg = replace(cfg, symbols=["BTC"], sizes_usd=[1_000.0], ref_size_usd=1_000.0)
+    # hyperliquid が 100.0、dydx が 101.0 -> 安い方 (hyperliquid) をショートすると +100bps の含み損
+    cheap = _snap("hyperliquid", "BTC", 0.20, px=100.0)
+    rich = _snap("dydx", "BTC", 0.05, px=101.0)
+    spreads, _ = evaluate([cheap, rich], cfg)
+    s = next(x for x in spreads if x.short_venue == "hyperliquid")
+    r = next(x for x in spreads if x.short_venue == "dydx")
+    assert s.basis_bps == pytest.approx(100.0)
+    assert r.basis_bps == pytest.approx(-100.0 * 100 / 101)   # 基準が逆になるので対称ではない
+    # net_apr / breakeven は価格差に影響されない (式どおり)
+    assert s.net_apr(14) == pytest.approx(net_apr(s.gross_apr, s.cost_bps, 14))
+    assert s.cost_bps == pytest.approx(19.0)
+
+
+def test_store_adds_new_columns_to_an_existing_db(tmp_path):
+    """計測中の sqlite にも列を後から足せる (計測をやり直さない)"""
+    import sqlite3
+
+    from tbf.funding.store import ADDED_COLUMNS
+
+    path = tmp_path / "old.sqlite"
+    store = FundingStore(path, 1.0)
+    _fill_window(store, 0, "a", "b", "BTC", 1_000.0, 0.10)
+    store.commit()
+    # 列を足す前の状態を作り直す
+    store.conn.close()
+    conn = sqlite3.connect(path)
+    for name, _ in ADDED_COLUMNS["spread_buckets"]:
+        conn.execute(f"ALTER TABLE spread_buckets DROP COLUMN {name}")
+    conn.commit()
+    conn.close()
+
+    reopened = FundingStore(path, 1.0)
+    have = {r["name"] for r in reopened.conn.execute("PRAGMA table_info(spread_buckets)")}
+    assert all(name in have for name, _ in ADDED_COLUMNS["spread_buckets"])
+    # 既存の行は残っていて、新しい列は 0 で埋まる
+    (row,) = reopened.query("SELECT n, sum_gross, sum_basis_bps FROM spread_buckets")
+    assert row["n"] == 1 and row["sum_gross"] == pytest.approx(0.10) and row["sum_basis_bps"] == 0.0
+    # 足した後も書き込めること
+    _fill_window(reopened, 1_000, "a", "b", "BTC", 1_000.0, 0.20)
+    reopened.commit()
+    assert reopened.query("SELECT COUNT(*) FROM spread_buckets")[0][0] == 2
+
+
 def test_report_formulas_match_spread_formulas():
     cfg, _, _ = cfg_and_client()
     cfg = replace(cfg, symbols=["BTC"], sizes_usd=[1_000.0], ref_size_usd=1_000.0)
