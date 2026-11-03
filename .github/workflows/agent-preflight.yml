@@ -1,0 +1,106 @@
+# エージェント用の読み取り専用の事前確認。承認済みの一度きりの診断で、確認後に削除する。
+#
+# 目的: 「GitHub に登録済み」と言われた secret が、ワークフローの実行文脈で実際に見えるかを確かめる。
+#       加えて Cloudflare トークンの権限 (Workers Scripts / D1) を読み取り API だけで確認する。
+#
+# 守っていること:
+#   - secret の値は一切出力しない。存在するかどうか (yes/no) だけを出す
+#   - Cloudflare へは GET だけ。作成・更新・削除・デプロイは1つもしない
+#   - wrangler.toml にも bots/ にも触らない
+#   - 結果は commit status に書く (公開リポジトリなので未認証でも読める = エージェントが結果を確認できる)
+name: Agent preflight (read-only)
+on:
+  push:
+    branches: [agent/preflight]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  # 1. Environment を指定しない文脈 = repository secret だけが見える
+  repo-secrets:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+      CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+      PREVIEW_ADMIN: ${{ secrets.PREVIEW_ADMIN_TOKEN != '' }}
+      PREVIEW_WEBHOOK: ${{ secrets.PREVIEW_WEBHOOK_URL != '' }}
+      PAPER_ADMIN: ${{ secrets.PAPER_ADMIN_TOKEN != '' }}
+    steps:
+      - name: Report repository-level secret presence
+        run: |
+          yn() { [ "$1" = "true" ] && echo yes || echo no; }
+          D="CF_TOKEN=$(yn "$CF_TOKEN") CF_ACCOUNT=$(yn "$CF_ACCOUNT") PREVIEW_ADMIN=$(yn "$PREVIEW_ADMIN") PREVIEW_WEBHOOK=$(yn "$PREVIEW_WEBHOOK") PAPER_ADMIN=$(yn "$PAPER_ADMIN")"
+          echo "$D" | tee -a "$GITHUB_STEP_SUMMARY"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success -f context=preflight/repo-secrets -f description="$D" >/dev/null
+
+  # 2. preview.yml と同じ文脈 = repository secret + preview Environment secret が見える
+  #    (preview Environment は preview.yml が既に使っているので、ここで新しく作られることはない)
+  preview-context:
+    runs-on: ubuntu-latest
+    environment: preview
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+      HAS_CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+      HAS_PREVIEW_ADMIN: ${{ secrets.PREVIEW_ADMIN_TOKEN != '' }}
+      HAS_PREVIEW_WEBHOOK: ${{ secrets.PREVIEW_WEBHOOK_URL != '' }}
+      HAS_PAPER_ADMIN: ${{ secrets.PAPER_ADMIN_TOKEN != '' }}
+      WORKER_URL_SET: ${{ vars.WORKER_URL != '' }}
+    steps:
+      - name: Report preview-context secret presence
+        run: |
+          yn() { [ "$1" = "true" ] && echo yes || echo no; }
+          D="CF_TOKEN=$(yn "$HAS_CF_TOKEN") CF_ACCOUNT=$(yn "$HAS_CF_ACCOUNT") PREVIEW_ADMIN=$(yn "$HAS_PREVIEW_ADMIN") PREVIEW_WEBHOOK=$(yn "$HAS_PREVIEW_WEBHOOK") PAPER_ADMIN=$(yn "$HAS_PAPER_ADMIN") WORKER_URL=$(yn "$WORKER_URL_SET")"
+          echo "$D" | tee -a "$GITHUB_STEP_SUMMARY"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success -f context=preflight/preview-context -f description="$D" >/dev/null
+
+      # Cloudflare は GET だけ。HTTP コードと件数しか出さない (アカウント ID も token も出さない)
+      - name: Probe Cloudflare token (GET only)
+        if: env.HAS_CF_TOKEN == 'true' && env.HAS_CF_ACCOUNT == 'true'
+        run: |
+          api() {
+            curl -sS -o "$RUNNER_TEMP/body.json" -w '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/$1"
+          }
+          VERIFY=$(api "user/tokens/verify")
+          VSTATUS=$(jq -r '.result.status // "n/a"' "$RUNNER_TEMP/body.json" 2>/dev/null || echo parse-error)
+
+          D1=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database?per_page=100")
+          D1N=$(jq -r '(.result // []) | length' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
+          D1PAPER=$(jq -r '[(.result // [])[] | select(.name=="trade-bot-paper")] | length' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
+
+          WK=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts")
+          WKN=$(jq -r '(.result // []) | length' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
+
+          SUB=$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")
+          SUBOK=$(jq -r 'if (.result.subdomain // "") != "" then "yes" else "no" end' "$RUNNER_TEMP/body.json" 2>/dev/null || echo "?")
+          rm -f "$RUNNER_TEMP/body.json"
+
+          D="verify=$VERIFY/$VSTATUS d1=$D1(n=$D1N,paper=$D1PAPER) workers=$WK(n=$WKN) subdomain=$SUB(set=$SUBOK)"
+          echo "$D" | tee -a "$GITHUB_STEP_SUMMARY"
+          STATE=success; [ "$VERIFY" = "200" ] || STATE=failure
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=$STATE -f context=preflight/cloudflare -f description="$D" >/dev/null
+
+      - name: Report missing Cloudflare secrets
+        if: env.HAS_CF_TOKEN != 'true' || env.HAS_CF_ACCOUNT != 'true'
+        run: |
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=failure -f context=preflight/cloudflare \
+            -f description="skipped: Cloudflare secrets not visible in this context" >/dev/null
+
+      - name: Check label paper-trial
+        run: |
+          N=$(gh api "repos/$GITHUB_REPOSITORY/labels?per_page=100" --jq '[.[] | select(.name=="paper-trial")] | length')
+          [ "$N" = "1" ] && S=success || S=failure
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=$S -f context=preflight/label-paper-trial \
+            -f description="paper-trial label count=$N (preview.yml はこのラベルが付いた PR だけを動かす)" >/dev/null
