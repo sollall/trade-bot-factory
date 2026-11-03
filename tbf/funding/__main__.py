@@ -20,7 +20,7 @@ from tbf.funding.config import load_config
 from tbf.funding.report import build_report
 from tbf.funding.scanner import Scanner
 from tbf.funding.store import FundingStore
-from tbf.funding.venues import VenueClient, check_all
+from tbf.funding.venues import VenueClient, VenueError, check_all
 from tbf.http import UrllibHttp
 from tbf.worker.notify import Notifier
 
@@ -59,18 +59,26 @@ async def main(argv: list[str]) -> int:
     http = UrllibHttp(timeout=15)
     client = VenueClient(http, cfg)
     try:
-        api_intervals, lines = await check_all(client)
+        res = await check_all(client)
     except Exception as e:  # noqa: BLE001
         _log(f"check failed: {type(e).__name__}: {e}")
         return 1
-    for line in lines:
+    for line in res.lines:
         _log(line)
     _log(
         f"対象 {len(cfg.tradable)} 会場 / 参照 {len(cfg.venues) - len(cfg.tradable)} 会場, "
         f"銘柄 {', '.join(cfg.symbols)}, サイズ {', '.join(f'${s:,.0f}' for s in cfg.sizes_usd)}"
     )
-    if api_intervals:
-        _log("API が建てを返した会場: " + ", ".join(f"{k}={v:g}h" for k, v in sorted(api_intervals.items())))
+    if res.api_intervals:
+        _log("API が建てを返した会場: " + ", ".join(f"{k}={v:g}h" for k, v in sorted(res.api_intervals.items())))
+    try:
+        # check は設定の点検なので厳しく、run は計測を止めないよう緩く判定する
+        res.raise_for_check(cfg) if a.command == "check" else res.raise_for_run(cfg)
+    except VenueError as e:
+        _log(f"check failed: {e}")
+        return 1
+    for name, err in res.errors.items():
+        _log(f"警告: {name} は今回つながりませんでした ({err}) — この会場を除いて続けます")
     if a.command == "check":
         _log("config OK")
         return 0

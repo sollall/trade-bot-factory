@@ -109,6 +109,36 @@ def test_annualize_normalizes_venue_intervals():
         annualize(0.0001, 0)
 
 
+def test_settlement_spacing_matches_the_registry_interval():
+    """ファンディングの支払い履歴が取れる会場は、支払い間隔 == 設定の建て であることを確かめる
+
+    レートの建てを間違えるのがこのスクリーナーで一番効く事故なので、
+    「レジストリにそう書いてある」ではなく「API の履歴がそうなっている」で固定する。
+    """
+    cfg = load_config(ROOT / "funding.toml", ROOT / "data" / "venues.toml")
+    # hyperliquid: fundingHistory の time は ms
+    hl = sorted(int(f["time"]) for f in fixture("hyperliquid_fundingHistory_BTC"))
+    # 記録時刻には数十 ms のばらつきがあるので秒に丸めて比べる
+    gaps = {round((b - a) / 1000) for a, b in zip(hl, hl[1:])}
+    assert gaps == {3600}, gaps
+    assert cfg.venue("hyperliquid").funding_interval_hours == 1
+
+    # dydx: historicalFunding の effectiveAt は ISO8601
+    from datetime import datetime
+
+    ts = sorted(
+        datetime.fromisoformat(f["effectiveAt"].replace("Z", "+00:00")).timestamp()
+        for f in fixture("dydx_historicalFunding_BTC")["historicalFunding"]
+    )
+    gaps = [b - a for a, b in zip(ts, ts[1:])]
+    assert all(abs(g - 3600) < 5 for g in gaps), gaps
+    assert cfg.venue("dydx").funding_interval_hours == 1
+    # 履歴のレートと perpetualMarkets の nextFundingRate が同じ桁 (= 同じ建て) であること
+    hist = [float(f["rate"]) for f in fixture("dydx_historicalFunding_BTC")["historicalFunding"]]
+    nxt = float(fixture("dydx_market_BTC")["markets"]["BTC-USD"]["nextFundingRate"])
+    assert 0.1 < nxt / (sum(hist) / len(hist)) < 10, (nxt, hist)
+
+
 def test_lighter_funding_rates_endpoint_is_8h_denominated():
     """Lighter の 2 つの endpoint の建てが食い違わないことを fixture で固定する
 
@@ -260,10 +290,13 @@ async def test_all_venues_agree_on_the_level_after_normalization():
 
 async def test_check_all_reports_every_venue():
     cfg, client, _ = cfg_and_client()
-    api_intervals, lines = await check_all(client)
+    res = await check_all(client)
     # Paradex は API 自身が建てを返すので突き合わせできる
-    assert api_intervals["paradex"] == 8.0
-    text = "\n".join(lines)
+    assert res.api_intervals["paradex"] == 8.0
+    assert res.ok == {v.name for v in cfg.venues} and not res.errors and not res.config_errors
+    res.raise_for_check(cfg)
+    res.raise_for_run(cfg)
+    text = "\n".join(res.lines)
     for v in cfg.venues:
         assert v.name in text
     assert "参照" in text and "対象" in text
@@ -272,16 +305,45 @@ async def test_check_all_reports_every_venue():
 async def test_check_all_detects_interval_mismatch():
     cfg, client, _ = cfg_and_client()
     broken = [replace(v, funding_interval_hours=1.0) if v.name == "paradex" else v for v in cfg.venues]
-    client.cfg = replace(cfg, venues=broken)
-    with pytest.raises(VenueError, match="funding_interval_hours の食い違い"):
-        await check_all(client)
+    client.cfg = cfg = replace(cfg, venues=broken)
+    res = await check_all(client)
+    # 建ての食い違いは設定の誤りなので check でも run でも落とす
+    assert res.config_errors
+    for raise_for in (res.raise_for_check, res.raise_for_run):
+        with pytest.raises(VenueError, match="funding_interval_hours の食い違い"):
+            raise_for(cfg)
 
 
-async def test_check_all_fails_when_a_venue_is_down():
+async def test_tradable_venue_down_fails_check_but_run_keeps_going():
     cfg, client, http = cfg_and_client()
     http.down.add("zklighter")
+    res = await check_all(client)
+    assert "lighter" in res.errors
+    # check は設定の点検なので落とす
     with pytest.raises(VenueError, match="lighter"):
-        await check_all(client)
+        res.raise_for_check(cfg)
+    # run は残り 3 会場でペアが作れるので続ける (7 日計測を 1 会場の障害で止めない)
+    res.raise_for_run(cfg)
+    assert res.ok_tradable(cfg) == ["hyperliquid", "paradex", "dydx"]
+
+
+async def test_run_stops_when_fewer_than_two_tradable_venues_are_up():
+    cfg, client, http = cfg_and_client()
+    http.down.update({"zklighter", "paradex", "dydx"})
+    res = await check_all(client)
+    with pytest.raises(VenueError, match="2 つ以上つながりません"):
+        res.raise_for_run(cfg)
+
+
+async def test_reference_only_venue_down_is_only_a_warning():
+    cfg, client, http = cfg_and_client()
+    http.down.add("binance")   # 地域制限でつながらない状況
+    res = await check_all(client)
+    assert "binance" in res.errors
+    # 参照のみの会場は計測を止める理由にならない
+    res.raise_for_check(cfg)
+    res.raise_for_run(cfg)
+    assert "参照のみなので計測は続行" in "\n".join(res.lines)
 
 
 async def test_session_marks_rate_limit():

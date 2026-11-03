@@ -278,22 +278,70 @@ class VenueClient:
         return VenueSnapshot(v.name, self.clock(), s.latency_ms, s.calls, symbols)
 
 
-async def check_all(client: VenueClient) -> tuple[dict[str, float], list[str]]:
-    """設定した会場に実際につながるか・記号が存在するかを確かめる
+@dataclass
+class CheckResult:
+    # 会場 -> API 自身が返した建て (時間)
+    api_intervals: dict[str, float]
+    lines: list[str]
+    # 取得できた会場
+    ok: set[str]
+    # 会場 -> 失敗の理由
+    errors: dict[str, str]
+    # 設定の誤り (建ての食い違いなど)。接続できないのとは別扱い
+    config_errors: list[str]
 
-    戻り値は (会場 -> API が返した建て, 表示する行)。つながらない会場があれば VenueError を投げる。
+    def ok_tradable(self, cfg: FundingConfig) -> list[str]:
+        return [v.name for v in cfg.tradable if v.name in self.ok]
+
+    def raise_for_check(self, cfg: FundingConfig) -> None:
+        """check サブコマンド用: 設定の誤りと、売買対象の会場の接続失敗は許さない
+
+        参照のみの会場 (CEX など) が地域制限などでつながらないのは、計測を止める理由にならない
+        ので警告だけにする。
+        """
+        bad = list(self.config_errors)
+        bad += [f"{n}: {e}" for n, e in self.errors.items() if not cfg.venue(n).reference_only]
+        if bad:
+            raise VenueError("check failed:\n  " + "\n  ".join(bad))
+
+    def raise_for_run(self, cfg: FundingConfig) -> None:
+        """run 用: ペアが作れる数の会場が生きていればよい
+
+        7 日回す計測で 1 会場の一時的な障害に起動を止められると、再起動ループで
+        計測自体が進まない。落ちている会場は scanner が実行中もスキップする。
+        """
+        if self.config_errors:
+            raise VenueError("check failed:\n  " + "\n  ".join(self.config_errors))
+        alive = self.ok_tradable(cfg)
+        if len(alive) < 2:
+            raise VenueError(
+                "売買対象の会場が 2 つ以上つながりません (生きている: "
+                + (", ".join(alive) or "なし")
+                + ")\n  "
+                + "\n  ".join(f"{n}: {e}" for n, e in self.errors.items())
+            )
+
+
+async def check_all(client: VenueClient) -> CheckResult:
+    """設定した会場に実際につながるか・記号が存在するか・建てが設定と合っているかを確かめる
+
+    ここでは投げない。呼び出し側が raise_for_check / raise_for_run で厳しさを選ぶ。
     """
     cfg = client.cfg
     results = await asyncio.gather(*(client.fetch(v) for v in cfg.venues), return_exceptions=True)
     lines: list[str] = []
-    failed: list[str] = []
+    errors: dict[str, str] = {}
+    config_errors: list[str] = []
+    ok: set[str] = set()
     api_intervals: dict[str, float] = {}
     for v, r in zip(cfg.venues, results):
         tag = "参照" if v.reference_only else "対象"
         if isinstance(r, BaseException):
-            failed.append(f"{v.name}: {type(r).__name__}: {r}")
-            lines.append(f"[{tag}] {v.name:>12}: NG  {type(r).__name__}: {r}")
+            errors[v.name] = f"{type(r).__name__}: {r}"
+            note = " (参照のみなので計測は続行)" if v.reference_only else ""
+            lines.append(f"[{tag}] {v.name:>12}: NG  {errors[v.name]}{note}")
             continue
+        ok.add(v.name)
         for sym, snap in sorted(r.symbols.items()):
             book = snap.book
             depth = ""
@@ -309,7 +357,7 @@ async def check_all(client: VenueClient) -> tuple[dict[str, float], list[str]]:
             if snap.api_interval_hours is not None:
                 api_intervals[v.name] = snap.api_interval_hours
                 if abs(snap.api_interval_hours - v.funding_interval_hours) > 1e-9:
-                    failed.append(
+                    config_errors.append(
                         f"{v.name}: funding_interval_hours の食い違い "
                         f"(設定 {v.funding_interval_hours}h / API {snap.api_interval_hours}h)"
                     )
@@ -317,9 +365,7 @@ async def check_all(client: VenueClient) -> tuple[dict[str, float], list[str]]:
             f"[{tag}] {v.name:>12}      {r.calls} calls {r.latency_ms:.0f}ms"
             f"  taker {v.taker_bps:g}bps maker {v.maker_bps:g}bps  ({v.fee_source or 'fee_source 未記入'})"
         )
-    if failed:
-        raise VenueError("check failed:\n  " + "\n  ".join(failed))
-    return api_intervals, lines
+    return CheckResult(api_intervals, lines, ok, errors, config_errors)
 
 
 def _notional(levels: tuple[tuple[float, float], ...]) -> float:
