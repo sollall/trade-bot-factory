@@ -14,9 +14,12 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from tbf.registry import bot_ids, load_bot
 from tbf.worker.db import SqliteDB
 
 ROOT = Path(__file__).resolve().parent.parent
+# paper Worker が動かす bot は bots/ から導出する (直書きすると bot を増やすたびに落ちる)
+PAPER_BOTS = sorted(i for i in bot_ids() if "paper" in load_bot(i).deploy)
 HOUR = 3_600_000
 NOW = 1_800_000_000_000 // HOUR * HOUR + 30_000
 
@@ -129,7 +132,7 @@ async def test_scheduled_and_fetch_through_entry(entry):
     await w.scheduled(types.SimpleNamespace(cron="* * * * *", scheduledTime=float(NOW)))
 
     rows = await db.query("SELECT bot_id, status, portfolio, halt_reason FROM bot_state ORDER BY bot_id")
-    assert [r["bot_id"] for r in rows] == ["eth_funding_carry", "eth_funding_hedged", "rsi_reversion", "sma_cross"]
+    assert [r["bot_id"] for r in rows] == PAPER_BOTS
     assert not await db.query("SELECT * FROM events WHERE level='error'")
     pf = {r["bot_id"]: json.loads(r["portfolio"]) for r in rows}
     # 上昇トレンドのデータなので sma_cross は買っている
@@ -143,7 +146,7 @@ async def test_scheduled_and_fetch_through_entry(entry):
     req = types.SimpleNamespace(method="GET", url="https://w/api/bots", headers={"authorization": "Bearer t"})
     res = await w.fetch(req)
     assert res.status == 200 and res.headers["content-type"] == "application/json"
-    assert {b["id"] for b in json.loads(res.body)} == {"eth_funding_carry", "eth_funding_hedged", "rsi_reversion", "sma_cross"}
+    assert {b["id"] for b in json.loads(res.body)} == set(PAPER_BOTS)
 
     req = types.SimpleNamespace(method="GET", url="https://w/", headers={})
     assert (await w.fetch(req)).status == 401
@@ -164,4 +167,4 @@ async def test_healthz_reports_build_after_tick(entry):
     assert (await w.fetch(req)).status == 503  # まだ cron が動いていない
     await w.scheduled(types.SimpleNamespace(cron="* * * * *", scheduledTime=float(NOW)))
     hb = (await db.query("SELECT * FROM heartbeat"))[0]
-    assert hb["build"] == build_info.BUILD and hb["bots"] == 4
+    assert hb["build"] == build_info.BUILD and hb["bots"] == len(PAPER_BOTS)
