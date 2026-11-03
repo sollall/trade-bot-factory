@@ -527,6 +527,29 @@ async def test_scanner_survives_venue_failure_and_backs_off(tmp_path):
     assert "12ms" in text and "1 リクエストあたり" in text
 
 
+async def test_poll_schedule_tolerates_clock_jitter(tmp_path):
+    """ループが 1ms 早く回っただけで 1 周まるごとスキップされないこと
+
+    厳密な >= で判定していると、実効の取得間隔が倍になって計測密度が落ちる。
+    """
+    cfg, _, _ = cfg_and_client()
+    cfg = replace(
+        cfg, symbols=["BTC"], sizes_usd=[1_000.0], ref_size_usd=1_000.0,
+        venues=[replace(v, poll_interval_sec=15.0) for v in cfg.venues if v.name in ("hyperliquid", "dydx")],
+    )
+    t = [1_700_000_000_000]
+    client = FakeClient(cfg, {"hyperliquid": 0.30, "dydx": 0.05}, lambda: t[0])
+    scanner, store = scanner_for(tmp_path, cfg, client, lambda: t[0])
+    await scanner.poll_once()
+    t[0] += 15_000 - 1          # 1ms 早い
+    assert {v.name for v in scanner.due(t[0])} == {"hyperliquid", "dydx"}
+    await scanner.poll_once()
+    assert store.query("SELECT COUNT(*) FROM polls")[0][0] == 4
+    # 許容幅を超えて早い場合はちゃんと待つ
+    t[0] += 1_000
+    assert scanner.due(t[0]) == []
+
+
 async def test_stale_snapshot_is_excluded(tmp_path):
     cfg, _, _ = cfg_and_client()
     cfg = replace(

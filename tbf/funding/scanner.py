@@ -17,6 +17,14 @@ from tbf.funding.spread import EpisodeTracker, evaluate
 from tbf.funding.store import FundingStore
 from tbf.funding.venues import VenueClient, VenueSnapshot
 
+# 「次に取る時刻」を厳密な >= で判定すると、ループが 1ms 早く回った回にその会場が
+# 丸ごと 1 周スキップされ、実効の取得間隔が倍になる。わずかな前倒しを許す。
+DUE_SLACK_MS = 500
+
+
+def due_slack_ms(interval_sec: float) -> int:
+    return min(DUE_SLACK_MS, int(interval_sec * 1000 * 0.05))
+
 
 class Scanner:
     def __init__(
@@ -38,7 +46,11 @@ class Scanner:
         self.closed_episodes = 0
 
     def due(self, now: int) -> list[VenueConfig]:
-        return [v for v in self.cfg.venues if now >= self.next_due.get(v.name, 0)]
+        return [
+            v
+            for v in self.cfg.venues
+            if now + due_slack_ms(v.poll_interval_sec) >= self.next_due.get(v.name, 0)
+        ]
 
     async def poll_once(self) -> None:
         now = self.clock()
