@@ -320,7 +320,7 @@ def build_report(store: FundingStore, cfg: FundingConfig, since: int, until: Opt
     # ---- 1b. 会場間の価格差 (net_apr に含めていないので別建てで出す)
     L.append(f"\n== 1b. 入った瞬間の会場間の価格差 (片脚 ${ref:,.0f}) — net_apr には含めていません")
     L.append("+ は「安い会場をショート / 高い会場をロング」= 建てた瞬間の含み損。解消時の価格差が同じなら相殺される")
-    wb = [32, 5, -10, -10, -10, -14]
+    wb = [32, 5, -12, -11, -11, -17]
     L.append(_row(list(zip(["ショート / ロング", "銘柄", "価格差 avg", "min", "max", "往復bps との比"], wb))))
     for s in stats[:10]:
         ratio = f"{s.avg_basis_bps / s.avg_cost_bps:.2f}x" if s.avg_cost_bps else "n/a"
@@ -357,18 +357,21 @@ def build_report(store: FundingStore, cfg: FundingConfig, since: int, until: Opt
                  f"{b.avg_cost_bps:.2f}", _days(b.breakeven), str(b.n)], w3))))
 
     # ---- 4. 稼働性
-    L.append("\n== 4. 会場ごとの稼働性")
-    w4 = [14, -7, -8, -8, -6, -8, -8, -11]
+    L.append("\n== 4. 会場ごとの稼働性 (レイテンシは 1 リクエストあたり = ポーリング合計 / calls)")
+    w4 = [14, -7, -8, -8, -6, -9, -9, -11]
     L.append(_row(list(zip(["会場", "poll", "エラー", "率", "429", "p50", "p95", "calls/poll"], w4))))
     for p in store.query(
         """SELECT venue, COUNT(*) n, SUM(ok = 0) errors, SUM(rate_limited) limited, SUM(calls) calls
            FROM polls WHERE time >= ? AND time <= ? GROUP BY venue ORDER BY venue""",
         (since, until),
     ):
+        # latency_ms は 1 ポーリングで投げた calls 本の合計なので、1 本あたりに割り戻す
         lat = [
             r[0]
             for r in store.query(
-                "SELECT latency_ms FROM polls WHERE venue=? AND time>=? AND time<=? AND latency_ms IS NOT NULL ORDER BY latency_ms",
+                """SELECT latency_ms / NULLIF(calls, 0) FROM polls
+                   WHERE venue=? AND time>=? AND time<=? AND latency_ms IS NOT NULL AND calls > 0
+                   ORDER BY latency_ms / NULLIF(calls, 0)""",
                 (p["venue"], since, until),
             )
         ]

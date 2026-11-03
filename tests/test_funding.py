@@ -523,6 +523,8 @@ async def test_scanner_survives_venue_failure_and_backs_off(tmp_path):
 
     text = build_report(store, cfg, 0, until=t[0] + 1)
     assert "エラー例 lighter" in text
+    # 稼働性のレイテンシは 1 リクエストあたりに割り戻している (FakeClient は 1 call / 12ms)
+    assert "12ms" in text and "1 リクエストあたり" in text
 
 
 async def test_stale_snapshot_is_excluded(tmp_path):
