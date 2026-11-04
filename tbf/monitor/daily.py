@@ -58,6 +58,10 @@ STATE_FILES = [
     "reports/monitoring/daily.csv",
 ]
 COMMIT_STATE_ITEM_ID = "_state-commit"
+# この自動コミットを実行するのは定点観測係。チェックアウト共有の .git/config は
+# 別エージェント名で固定されているため、ここで著者を明示する。
+COMMIT_AUTHOR_NAME = "定点観測係 (Paperclip agent)"
+COMMIT_AUTHOR_EMAIL = "agent+monitor@users.noreply.github.com"
 
 # TRA-11 monitoring-watchlist のトリガー値 (このファイルでは変更しない。変更は文書のオーナーの仕事)
 AAVE_BASELINE_7D = {"ethereum": 67, "arbitrum": 76, "base": 88}  # Day-1 (2026-11-03) 実測
@@ -143,15 +147,29 @@ def commit_monitoring_state(date_utc: str) -> tuple[bool, str]:
         )
         # pathspec を付けて index を迂回する。同じチェックアウトで別の作業が
         # ステージされていても、それを監視コミットに巻き込まないため。
+        # 著者は -c で run ごとに上書きする。チェックアウトの .git/config は
+        # 全エージェント共有なので、そちらは書き換えない。
         res = subprocess.run(
-            ["git", "commit", "-m", f"monitor: {date_utc} 定点観測ログ", "--", *STATE_FILES],
+            [
+                "git",
+                "-c", f"user.name={COMMIT_AUTHOR_NAME}",
+                "-c", f"user.email={COMMIT_AUTHOR_EMAIL}",
+                "commit", "-m", f"monitor: {date_utc} 定点観測ログ", "--", *STATE_FILES,
+            ],
             cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if res.returncode != 0:
             combined = (res.stdout + res.stderr)
             if "nothing to commit" in combined:
                 return True, "変更なし（コミット不要）"
-            return False, combined.strip()[:500]
+            # 上の git add でステージした分を共有 index に残さない。
+            # 残すと、別エージェントの pathspec なし commit に紛れ込む。
+            subprocess.run(
+                ["git", "reset", "-q", "--", *STATE_FILES],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            # git が無言で失敗することがある（例: フックによる拒否）ので終了コードを残す。
+            return False, f"git commit exit={res.returncode} {combined.strip()[:500]}".strip()
         return True, res.stdout.strip()
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {e}"
