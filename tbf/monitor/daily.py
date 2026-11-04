@@ -141,8 +141,10 @@ def commit_monitoring_state(date_utc: str) -> tuple[bool, str]:
             ["git", "add", *STATE_FILES],
             cwd=REPO_ROOT, check=True, capture_output=True, text=True,
         )
+        # pathspec を付けて index を迂回する。同じチェックアウトで別の作業が
+        # ステージされていても、それを監視コミットに巻き込まないため。
         res = subprocess.run(
-            ["git", "commit", "-m", f"monitor: {date_utc} 定点観測ログ"],
+            ["git", "commit", "-m", f"monitor: {date_utc} 定点観測ログ", "--", *STATE_FILES],
             cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if res.returncode != 0:
