@@ -1,0 +1,74 @@
+date_utc,item_id,value,unit,source,note,run_ts_utc
+2026-11-03,1-1-BTC,0.08943448756666768,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=BTC,n=720 neg_frac_7d=0.0119 n7=168
+2026-11-03,1-1-ETH,0.0660739656166671,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=ETH,n=720 neg_frac_7d=0.1429 n7=168
+2026-11-03,1-1-HYPE,0.12056794853333413,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=HYPE,n=720 neg_frac_7d=0.0238 n7=168
+2026-11-03,1-2-susde-yield,0.04962408398980078,annualized_rate,eth_call 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 convertToAssets,block_now=26337218 block_30d_ago=26121218
+2026-11-03,1-2-usde-peg,-0.00029273709999999564,deviation,eth_call 0x02950460e2b9529d0e00284a5fa2d7bdf3fa4d72 get_dy,"get_dy(0,1,10000e18) on Curve USDe/USDC pool"
+2026-11-03,1-3-gas-ethereum,0.0522291925,gwei,ethereum eth_getBlockByNumber x20,n=20 span_blocks~=50400
+2026-11-03,1-3-gas-base,0.005,gwei,base eth_getBlockByNumber x20,n=20 span_blocks~=302400
+2026-11-03,1-3-gas-arbitrum,0.020018,gwei,arbitrum eth_getBlockByNumber x20,n=20 span_blocks~=2419200
+2026-11-03,2-1-aave-liq-ethereum,67.0,liquidation_count_7d,ethereum eth_getLogs LiquidationCall 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2,from_block=26286818 to_block=26337218 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-1-aave-liq-arbitrum,76.0,liquidation_count_7d,arbitrum eth_getLogs LiquidationCall 0x794a61358D6845594F94dc1DB02A252b5b4814aD,from_block=518579260 to_block=520998460 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-1-aave-liq-base,88.0,liquidation_count_7d,base eth_getLogs LiquidationCall 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5,from_block=53175120 to_block=53477520 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-2-steth-depeg,-0.0012743190097850299,deviation,eth_call 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022 get_dy,"get_dy(1,0,10000e18) stETH->ETH on Curve stETH/ETH pool"
+2026-11-03,2-3-hl-universe,235.0,coin_count,https://api.hyperliquid.xyz/info type=meta,Day-1 baseline: 比較対象の前回スナップショットなし。今回の件数を基準として記録
+2026-11-03,3-1-derive-api,0.0,any_200,lyra.finance / derive.xyz,https://api.lyra.finance/public/get_instruments -> 503; https://api.derive.xyz/public/get_instruments -> 404
+2026-11-03,1-1-BTC,0.08943448756666768,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=BTC,n=720 neg_frac_7d=0.0119 n7=168
+2026-11-03,1-1-ETH,0.0660739656166671,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=ETH,n=720 neg_frac_7d=0.1429 n7=168
+2026-11-03,1-1-HYPE,0.12056794853333416,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=HYPE,n=720 neg_frac_7d=0.0238 n7=168
+2026-11-03,1-2-susde-yield,0.049626648421849495,annualized_rate,eth_call 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 convertToAssets,block_now=26337515 block_30d_ago=26121515
+2026-11-03,1-2-usde-peg,-0.00042133399999999543,deviation,eth_call 0x02950460e2b9529d0e00284a5fa2d7bdf3fa4d72 get_dy,"get_dy(0,1,10000e18) on Curve USDe/USDC pool"
+2026-11-03,1-3-gas-ethereum,0.0630618165,gwei,ethereum eth_getBlockByNumber x20,n=20 span_blocks~=50400
+2026-11-03,1-3-gas-base,0.005,gwei,base eth_getBlockByNumber x20,n=20 span_blocks~=302400
+2026-11-03,1-3-gas-arbitrum,0.020004,gwei,arbitrum eth_getBlockByNumber x20,n=20 span_blocks~=2419200
+2026-11-03,2-1-aave-liq-ethereum,67.0,liquidation_count_7d,ethereum eth_getLogs LiquidationCall 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2,from_block=26287115 to_block=26337515 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-1-aave-liq-arbitrum,76.0,liquidation_count_7d,arbitrum eth_getLogs LiquidationCall 0x794a61358D6845594F94dc1DB02A252b5b4814aD,from_block=518591195 to_block=521010395 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-1-aave-liq-base,88.0,liquidation_count_7d,base eth_getLogs LiquidationCall 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5,from_block=53176912 to_block=53479312 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-2-steth-depeg,-0.001264993089845623,deviation,eth_call 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022 get_dy,"get_dy(1,0,10000e18) stETH->ETH on Curve stETH/ETH pool"
+2026-11-03,2-3-hl-universe,235.0,coin_count,https://api.hyperliquid.xyz/info type=meta,Day-1 baseline: 比較対象の前回スナップショットなし。今回の件数を基準として記録
+2026-11-03,3-1-derive-api,0.0,any_200,lyra.finance / derive.xyz,https://api.lyra.finance/public/get_instruments -> 503; https://api.derive.xyz/public/get_instruments -> 404
+2026-11-03,1-1-BTC,0.08943448756666768,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=BTC,n=720 neg_frac_7d=0.0119 n7=168
+2026-11-03,1-1-ETH,0.0660739656166671,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=ETH,n=720 neg_frac_7d=0.1429 n7=168
+2026-11-03,1-1-HYPE,0.12056794853333416,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=HYPE,n=720 neg_frac_7d=0.0238 n7=168
+2026-11-03,1-2-susde-yield,0.04962672351795128,annualized_rate,eth_call 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 convertToAssets,block_now=26337523 block_30d_ago=26121523
+2026-11-03,1-2-usde-peg,-0.00042133399999999543,deviation,eth_call 0x02950460e2b9529d0e00284a5fa2d7bdf3fa4d72 get_dy,"get_dy(0,1,10000e18) on Curve USDe/USDC pool"
+2026-11-03,1-3-gas-ethereum,0.057798706,gwei,ethereum eth_getBlockByNumber x20,n=20 span_blocks~=50400
+2026-11-03,1-3-gas-base,0.005,gwei,base eth_getBlockByNumber x20,n=20 span_blocks~=302400
+2026-11-03,1-3-gas-arbitrum,0.020019000000000002,gwei,arbitrum eth_getBlockByNumber x20,n=20 span_blocks~=2419200
+2026-11-03,1-4-eth-realized-vol,0.4518662581015684,annualized_vol,https://api.hyperliquid.xyz/info candleSnapshot coin=ETH interval=1h,n_candles=720 n_returns=719 (HL ETH 1h代用、プール価格ではない)
+2026-11-03,2-1-aave-liq-ethereum,67.0,liquidation_count_7d,ethereum eth_getLogs LiquidationCall 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2,from_block=26287123 to_block=26337523 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-1-aave-liq-arbitrum,76.0,liquidation_count_7d,arbitrum eth_getLogs LiquidationCall 0x794a61358D6845594F94dc1DB02A252b5b4814aD,from_block=518591510 to_block=521010710 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-1-aave-liq-base,88.0,liquidation_count_7d,base eth_getLogs LiquidationCall 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5,from_block=53176958 to_block=53479358 (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-03,2-2-steth-depeg,-0.001264993089845623,deviation,eth_call 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022 get_dy,"get_dy(1,0,10000e18) stETH->ETH on Curve stETH/ETH pool"
+2026-11-03,2-3-hl-universe,235.0,coin_count,https://api.hyperliquid.xyz/info type=meta,Day-1 baseline: 比較対象の前回スナップショットなし。今回の件数を基準として記録
+2026-11-03,3-1-derive-api,0.0,any_200,lyra.finance / derive.xyz,https://api.lyra.finance/public/get_instruments -> 503; https://api.derive.xyz/public/get_instruments -> 404
+2026-11-04,1-1-BTC,0.08943448756666768,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=BTC,n=720 neg_frac_7d=0.0119 n7=168
+2026-11-04,1-1-ETH,0.06607396561666712,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=ETH,n=720 neg_frac_7d=0.1429 n7=168
+2026-11-04,1-1-HYPE,0.12056794853333413,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=HYPE,n=720 neg_frac_7d=0.0238 n7=168
+2026-11-04,1-2-susde-yield,0.04963091688355581,annualized_rate,eth_call 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 convertToAssets,block_now=26337891 block_30d_ago=26121891
+2026-11-04,1-2-usde-peg,-0.0004319546000001173,deviation,eth_call 0x02950460e2b9529d0e00284a5fa2d7bdf3fa4d72 get_dy,"get_dy(0,1,10000e18) on Curve USDe/USDC pool"
+2026-11-04,1-3-gas-ethereum,0.0516199435,gwei,ethereum eth_getBlockByNumber x20,n=20 span_blocks~=50400
+2026-11-04,1-3-gas-base,0.005,gwei,base eth_getBlockByNumber x20,n=20 span_blocks~=302400
+2026-11-04,1-3-gas-arbitrum,0.020025,gwei,arbitrum eth_getBlockByNumber x20,n=20 span_blocks~=2419200
+2026-11-04,1-4-eth-realized-vol,0.4530121239359898,annualized_vol,https://api.hyperliquid.xyz/info candleSnapshot coin=ETH interval=1h,n_candles=720 n_returns=719 (HL ETH 1h代用、プール価格ではない)
+2026-11-04,2-1-aave-liq-ethereum,67.0,liquidation_count_7d,ethereum eth_getLogs LiquidationCall 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2,from_block=26287494 to_block=26337894 width=9990 rpc=https://rpc.mevblocker.io (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-04,2-1-aave-liq-arbitrum,76.0,liquidation_count_7d,arbitrum eth_getLogs LiquidationCall 0x794a61358D6845594F94dc1DB02A252b5b4814aD,from_block=518606546 to_block=521025746 width=9990 rpc=https://arb1.arbitrum.io/rpc (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-04,2-1-aave-liq-base,88.0,liquidation_count_7d,base eth_getLogs LiquidationCall 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5,from_block=53179208 to_block=53481608 width=9990 rpc=https://base-rpc.publicnode.com (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-04,2-2-steth-depeg,-0.001276427621502818,deviation,eth_call 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022 get_dy,"get_dy(1,0,10000e18) stETH->ETH on Curve stETH/ETH pool"
+2026-11-04,2-3-hl-universe,235.0,coin_count,https://api.hyperliquid.xyz/info type=meta,前回スナップショットなし。今回の取得を基準として保存する
+2026-11-04,3-1-derive-api,0.0,any_200,lyra.finance / derive.xyz,https://api.lyra.finance/public/get_instruments -> 503; https://api.derive.xyz/public/get_instruments -> 404
+2026-11-04,1-1-BTC,0.08943448756666768,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=BTC,n=720 neg_frac_7d=0.0119 n7=168
+2026-11-04,1-1-ETH,0.06607396561666712,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=ETH,n=720 neg_frac_7d=0.1429 n7=168
+2026-11-04,1-1-HYPE,0.12056794853333413,annualized_rate,https://api.hyperliquid.xyz/info fundingHistory coin=HYPE,n=720 neg_frac_7d=0.0238 n7=168
+2026-11-04,1-2-susde-yield,0.04963101074881471,annualized_rate,eth_call 0x9D39A5DE30e57443BfF2A8307A4256c8797A3497 convertToAssets,block_now=26337901 block_30d_ago=26121901
+2026-11-04,1-2-usde-peg,-0.0004319546000001173,deviation,eth_call 0x02950460e2b9529d0e00284a5fa2d7bdf3fa4d72 get_dy,"get_dy(0,1,10000e18) on Curve USDe/USDC pool"
+2026-11-04,1-3-gas-ethereum,0.0572956335,gwei,ethereum eth_getBlockByNumber x20,n=20 span_blocks~=50400
+2026-11-04,1-3-gas-base,0.005,gwei,base eth_getBlockByNumber x20,n=20 span_blocks~=302400
+2026-11-04,1-3-gas-arbitrum,0.020025,gwei,arbitrum eth_getBlockByNumber x20,n=20 span_blocks~=2419200
+2026-11-04,1-4-eth-realized-vol,0.4530451069226046,annualized_vol,https://api.hyperliquid.xyz/info candleSnapshot coin=ETH interval=1h,n_candles=720 n_returns=719 (HL ETH 1h代用、プール価格ではない)
+2026-11-04,2-1-aave-liq-ethereum,67.0,liquidation_count_7d,ethereum eth_getLogs LiquidationCall 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2,from_block=26287504 to_block=26337904 width=9990 rpc=https://rpc.mevblocker.io (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-04,2-1-aave-liq-arbitrum,76.0,liquidation_count_7d,arbitrum eth_getLogs LiquidationCall 0x794a61358D6845594F94dc1DB02A252b5b4814aD,from_block=518606965 to_block=521026165 width=9990 rpc=https://arb1.arbitrum.io/rpc (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-04,2-1-aave-liq-base,88.0,liquidation_count_7d,base eth_getLogs LiquidationCall 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5,from_block=53179266 to_block=53481666 width=9990 rpc=https://base-rpc.publicnode.com (7日窓のみ。月次44件サンプルの window≥5ブロック統計は未実施)
+2026-11-04,2-2-steth-depeg,-0.001276427621502818,deviation,eth_call 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022 get_dy,"get_dy(1,0,10000e18) stETH->ETH on Curve stETH/ETH pool"
+2026-11-04,2-3-hl-universe,235.0,coin_count,https://api.hyperliquid.xyz/info type=meta,prev_asOf=2026-11-04T00:36:19.845931+00:00 prev_count=235 new=[] delisted=[]
+2026-11-04,3-1-derive-api,0.0,any_200,lyra.finance / derive.xyz,https://api.lyra.finance/public/get_instruments -> 503; https://api.derive.xyz/public/get_instruments -> 404

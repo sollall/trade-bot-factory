@@ -1,0 +1,14 @@
+{
+  "2-1-aave-liq-ethereum": {
+    "consecutive_fails": 0,
+    "last_fail_date": null
+  },
+  "2-1-aave-liq-arbitrum": {
+    "consecutive_fails": 0,
+    "last_fail_date": null
+  },
+  "2-1-aave-liq-base": {
+    "consecutive_fails": 0,
+    "last_fail_date": null
+  }
+}

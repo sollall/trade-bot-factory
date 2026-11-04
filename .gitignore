@@ -5,6 +5,11 @@ node_modules/
 __pycache__/
 .pytest_cache/
 data/
-reports/
+reports/*
+!reports/monitoring/
+reports/monitoring/*
+!reports/monitoring/hl_perp_universe.json
+!reports/monitoring/run_log.json
+!reports/monitoring/daily.csv
 .dev.vars
 wrangler.preview.toml
