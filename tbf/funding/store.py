@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS depth_misses (
   n INTEGER NOT NULL, PRIMARY KEY (bucket, venue, symbol, size_usd)
 );
 
+-- 確定済みファンディングの履歴 (backfill)。rate は「ロングが払うとき +」に正規化済み。
+-- hours はその区間の長さ (Paradex は連続課金なのでサンプル間隔が入る)。
+CREATE TABLE IF NOT EXISTS funding_history (
+  venue TEXT NOT NULL, symbol TEXT NOT NULL, time INTEGER NOT NULL,
+  hours REAL NOT NULL, rate REAL NOT NULL, mark REAL,
+  PRIMARY KEY (venue, symbol, time)
+);
+CREATE INDEX IF NOT EXISTS funding_history_time ON funding_history (time);
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -61,6 +70,14 @@ ADDED_COLUMNS = {
         ("sum_basis_bps", "REAL NOT NULL DEFAULT 0"),
         ("min_basis_bps", "REAL NOT NULL DEFAULT 0"),
         ("max_basis_bps", "REAL NOT NULL DEFAULT 0"),
+        # 2 会場のスナップショットの取得時刻の差 (ms)。これが大きいと basis は
+        # 「時刻のずれ」を測っていることになるので、必ず併記する
+        ("sum_lag_ms", "REAL NOT NULL DEFAULT 0"),
+        ("max_lag_ms", "REAL NOT NULL DEFAULT 0"),
+    ],
+    "episodes": [
+        # 片方の会場のデータが古くて計算から外れていた回数 (閉じずに保留した区間)
+        ("pending_polls", "INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 
@@ -115,14 +132,14 @@ class FundingStore:
         )
 
     def add_spread(self, time: int, s: Spread) -> None:
-        cost, basis = s.cost_bps, s.basis_bps
+        cost, basis, lag = s.cost_bps, s.basis_bps, float(s.lag_ms)
         # 列を後から足せるように、位置ではなく列名で入れる
         self.conn.execute(
             """INSERT INTO spread_buckets
                  (bucket, short_venue, long_venue, symbol, size_usd, n,
                   sum_gross, min_gross, max_gross, sum_cost_bps, min_cost_bps, max_cost_bps,
-                  sum_basis_bps, min_basis_bps, max_basis_bps)
-               VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)
+                  sum_basis_bps, min_basis_bps, max_basis_bps, sum_lag_ms, max_lag_ms)
+               VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT (bucket, short_venue, long_venue, symbol, size_usd) DO UPDATE SET
                  n = n + 1,
                  sum_gross = sum_gross + excluded.sum_gross,
@@ -132,10 +149,12 @@ class FundingStore:
                  max_cost_bps = MAX(max_cost_bps, excluded.max_cost_bps),
                  sum_basis_bps = sum_basis_bps + excluded.sum_basis_bps,
                  min_basis_bps = MIN(min_basis_bps, excluded.min_basis_bps),
-                 max_basis_bps = MAX(max_basis_bps, excluded.max_basis_bps)""",
+                 max_basis_bps = MAX(max_basis_bps, excluded.max_basis_bps),
+                 sum_lag_ms = sum_lag_ms + excluded.sum_lag_ms,
+                 max_lag_ms = MAX(max_lag_ms, excluded.max_lag_ms)""",
             (
                 self.bucket(time), s.short_venue, s.long_venue, s.symbol, s.size_usd,
-                s.gross_apr, s.gross_apr, s.gross_apr, cost, cost, cost, basis, basis, basis,
+                s.gross_apr, s.gross_apr, s.gross_apr, cost, cost, cost, basis, basis, basis, lag, lag,
             ),
         )
 
@@ -148,12 +167,43 @@ class FundingStore:
 
     def add_episode(self, e: Episode) -> None:
         self.conn.execute(
-            "INSERT INTO episodes VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            """INSERT INTO episodes
+                 (short_venue, long_venue, symbol, size_usd, start, end, polls,
+                  first_net_apr, max_net_apr, max_gross_apr, min_breakeven_days, pending_polls)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 e.short_venue, e.long_venue, e.symbol, e.size_usd, e.start, e.end, e.polls,
-                e.first_net_apr, e.max_net_apr, e.max_gross_apr, e.min_breakeven_days,
+                e.first_net_apr, e.max_net_apr, e.max_gross_apr, e.min_breakeven_days, e.pending_polls,
             ),
         )
+
+    def add_history(self, venue: str, symbol: str, points) -> int:
+        """確定ファンディングの履歴を入れる (同じ時刻は上書き)"""
+        rows = [(venue, symbol, p.time, p.hours, p.rate, p.mark) for p in points]
+        self.conn.executemany("INSERT OR REPLACE INTO funding_history VALUES (?,?,?,?,?,?)", rows)
+        self.conn.commit()
+        return len(rows)
+
+    def history(self, since: int, until: int) -> dict[tuple[str, str], list]:
+        """(会場, 銘柄) -> FundingPoint のリスト (時刻の昇順)"""
+        from tbf.funding.history import FundingPoint
+
+        out: dict[tuple[str, str], list] = {}
+        for r in self.conn.execute(
+            "SELECT venue, symbol, time, hours, rate, mark FROM funding_history"
+            " WHERE time >= ? AND time <= ? ORDER BY time",
+            (since, until),
+        ):
+            out.setdefault((r["venue"], r["symbol"]), []).append(
+                FundingPoint(r["time"], r["hours"], r["rate"], r["mark"])
+            )
+        return out
+
+    def history_coverage(self) -> list:
+        return self.conn.execute(
+            "SELECT venue, symbol, COUNT(*) n, MIN(time) lo, MAX(time) hi,"
+            " SUM(mark IS NOT NULL) marks FROM funding_history GROUP BY venue, symbol ORDER BY venue, symbol"
+        ).fetchall()
 
     def set_meta(self, key: str, value: str) -> None:
         self.conn.execute(

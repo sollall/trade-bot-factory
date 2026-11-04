@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from tbf.funding.config import FundingConfig, VenueConfig
 from tbf.funding.venues import SymbolSnapshot, VenueSnapshot
@@ -90,6 +90,9 @@ class Spread:
     # 依頼票の実効スプレッドの式には入っていないので net_apr には含めず、別に記録して報告する。
     # 解消時の価格差が入ったときと同じなら相殺されるが、同じである保証はない。
     basis_bps: float = 0.0
+    # 2 会場のスナップショットの取得時刻の差 (ms)。basis とスリッページは
+    # 同時刻の板で比べないと意味がないので、ずれの大きさを必ず持ち回る
+    lag_ms: int = 0
 
     @property
     def cost_bps(self) -> float:
@@ -120,11 +123,28 @@ class DepthMiss:
     size_usd: float
 
 
+def stale_price_venues(snapshots: list[VenueSnapshot], cfg: FundingConfig, now: int) -> set[str]:
+    """価格・板が古すぎて同時刻として扱えない会場
+
+    ファンディングレートは 3 分古くても困らないが、2 会場の価格差とスリッページは
+    「3 分前の板」と「今の板」を混ぜると時刻のずれを差として測ってしまう
+    (BTC は 3 分で 10bps 平気で動く)。そこで価格系だけ別の鮮度で切る。
+    """
+    limit = cfg.max_price_stale_sec * 1000
+    return {s.venue for s in snapshots if now - s.time > limit}
+
+
 def evaluate(
-    snapshots: list[VenueSnapshot], cfg: FundingConfig
+    snapshots: list[VenueSnapshot], cfg: FundingConfig, now: Optional[int] = None
 ) -> tuple[list[Spread], list[DepthMiss]]:
-    """全ての (ショート会場, ロング会場) × 銘柄 × サイズ の実効スプレッドを出す"""
+    """全ての (ショート会場, ロング会場) × 銘柄 × サイズ の実効スプレッドを出す
+
+    now を渡すと、価格・板が max_price_stale_sec より古い会場をペアから外す。
+    """
     by_venue = {s.venue: s for s in snapshots}
+    if now is not None:
+        for name in stale_price_venues(snapshots, cfg, now):
+            by_venue.pop(name, None)
     tradable = [v for v in cfg.tradable if v.name in by_venue]
     spreads: list[Spread] = []
     misses: list[DepthMiss] = []
@@ -152,6 +172,7 @@ def evaluate(
                 long_apr = sb.symbols[sym].funding_apr
                 short_px, long_px = sa.symbols[sym].ref_price, sb.symbols[sym].ref_price
                 basis = (long_px - short_px) / short_px * BPS if short_px > 0 else 0.0
+                lag = abs(sa.time - sb.time)
                 for size in cfg.sizes_usd:
                     ca, cb = costs[(a.name, sym, size)], costs[(b.name, sym, size)]
                     if not ca.ok or not cb.ok:
@@ -172,6 +193,7 @@ def evaluate(
                             short_apr=short_apr,
                             long_apr=long_apr,
                             basis_bps=basis,
+                            lag_ms=lag,
                         )
                     )
     return spreads, misses
@@ -192,6 +214,9 @@ class Episode:
     max_net_apr: float
     max_gross_apr: float
     min_breakeven_days: Optional[float]
+    # 片方の会場のデータが古くなって計算から外れていた回数。
+    # 閉じずに保留した区間なので、継続時間には含まれるが観測はできていない
+    pending_polls: int = 0
 
     @property
     def duration_sec(self) -> float:
@@ -207,10 +232,20 @@ class EpisodeTracker:
 
     min_net_apr: float
     hold_days: float
+    # データが古くなっただけのときに保留しておける上限 (秒)。
+    # これを超えたら「続いていた」とは言えないので閉じる
+    max_pending_sec: float = 180.0
     open: dict[tuple[str, str, str, float], Episode] = field(default_factory=dict)
+    pending_since: dict[tuple[str, str, str, float], int] = field(default_factory=dict)
 
-    def update(self, now: int, spreads: list[Spread]) -> list[Episode]:
-        """今回のポーリングを反映し、終わったエピソードを返す"""
+    def update(self, now: int, spreads: list[Spread], stale_venues: Iterable[str] = ()) -> list[Episode]:
+        """今回のポーリングを反映し、終わったエピソードを返す
+
+        片方の会場のデータが古くなって計算から外れただけのときは閉じない。
+        閉じてしまうと 1 本の機会が複数のエピソードに割れて、最長継続時間が
+        実際より短く出る (閾値を割ったのか、見えなくなったのかを区別する)。
+        """
+        stale = set(stale_venues)
         best: dict[tuple[str, str, str, float], Spread] = {}
         for s in spreads:
             cur = best.get(s.key)
@@ -219,8 +254,17 @@ class EpisodeTracker:
         closed = []
         for key in list(self.open):
             s = best.get(key)
-            if s is None or s.net_apr(self.hold_days) < self.min_net_apr:
-                closed.append(self.open.pop(key))
+            if s is not None:
+                self.pending_since.pop(key, None)
+                if s.net_apr(self.hold_days) < self.min_net_apr:
+                    closed.append(self.open.pop(key))
+                continue
+            # 見えなくなった理由が「会場のデータが古い」なら保留する
+            if (key[0] in stale or key[1] in stale) and now - self.pending_since.setdefault(key, now) <= self.max_pending_sec * 1000:
+                self.open[key].pending_polls += 1
+                continue
+            self.pending_since.pop(key, None)
+            closed.append(self.open.pop(key))
         for key, s in best.items():
             net = s.net_apr(self.hold_days)
             if net < self.min_net_apr:
@@ -244,4 +288,5 @@ class EpisodeTracker:
         """停止時に、開いているエピソードを打ち切って返す"""
         out = list(self.open.values())
         self.open.clear()
+        self.pending_since.clear()
         return out

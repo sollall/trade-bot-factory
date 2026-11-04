@@ -20,6 +20,8 @@ class VenueConfig:
     liquidation_bps: float
     poll_interval_sec: float
     book_depth: int
+    # API が 1 回で返す板の本数の上限 (0 = 上限なし)。book_depth をこれ以上に上げても効かない
+    max_book_levels: int
     # 共通シンボル -> 会場固有シンボル
     symbols: dict[str, str]
     # 売買しない会場 (CEX など)。ファンディングの水準を読むだけで、ペアには入れない
@@ -30,9 +32,19 @@ class VenueConfig:
     source: str = ""
     # API が建てを返すならそのフィールド名 (設定値との食い違いを check で出す)
     api_interval_field: str = ""
+    # 連続課金でファンディングの「建て」が表示上の決めごとでしかない会場 (Paradex)。
+    # 履歴を累積インデックスの差で取るので、サンプル間隔を別に持つ
+    history_sample_hours: float = 0.0
 
     def covers(self, symbol: str) -> bool:
         return symbol in self.symbols
+
+    @property
+    def effective_book_depth(self) -> int:
+        """実際に返ってくる板の本数の上限"""
+        if self.max_book_levels and self.book_depth > self.max_book_levels:
+            return self.max_book_levels
+        return self.book_depth
 
 
 @dataclass(frozen=True)
@@ -45,10 +57,22 @@ class FundingConfig:
     min_net_apr: float = 0.05
     poll_interval_sec: float = 15.0
     max_stale_sec: float = 180.0
+    # 価格・板はこれより古いものを混ぜない。ファンディングは 3 分古くても困らないが、
+    # 2 会場の価格差 (basis) とスリッページは「3 分前の板」と「今の板」を混ぜると
+    # 時刻のずれが差として出てしまう (BTC は 3 分で 10bps 平気で動く)
+    max_price_stale_sec: float = 30.0
     spread_bucket_sec: float = 300.0
     retention_days: float = 14.0
     walkforward_windows: int = 7
     ref_size_usd: float = 5_000.0
+    # ---- 履歴 (backfill) と確定ファンディングでの主指標
+    backfill_days: float = 90.0
+    # 建てる時刻の格子 (時間)。細かくすると近い建玉が重なるだけなので既定は 6 時間
+    entry_grid_hours: float = 6.0
+    # 保有期間のうち両会場のデータがこの割合なければその建玉は評価しない
+    min_coverage: float = 0.9
+    # 片脚の建玉に対するレバレッジ。資本に対する利回りの換算に使う (1.0 = フル担保)
+    leverage: float = 1.0
     venues_file: str = ""
     # check で埋める: 会場 -> API が返した建て (時間)
     api_intervals: dict[str, float] = field(default_factory=dict)
@@ -76,6 +100,7 @@ def _venue(raw: dict, defaults: dict) -> VenueConfig:
         liquidation_bps=float(raw.get("liquidation_bps", 0.0)),
         poll_interval_sec=float(raw.get("poll_interval_sec", defaults["poll_interval_sec"])),
         book_depth=int(raw.get("book_depth", defaults["book_depth"])),
+        max_book_levels=int(raw.get("max_book_levels", 0)),
         symbols=dict(raw["symbols"]),
         reference_only=bool(raw.get("reference_only", False)),
         fee_source=str(raw.get("fee_source", "")),
@@ -83,6 +108,7 @@ def _venue(raw: dict, defaults: dict) -> VenueConfig:
         points_program=str(raw.get("points_program", "")),
         source=str(raw.get("source", "")),
         api_interval_field=str(raw.get("api_interval_field", "")),
+        history_sample_hours=float(raw.get("history_sample_hours", 0.0)),
     )
 
 
@@ -130,9 +156,14 @@ def load_config(path: str | Path, venues_path: str | Path | None = None) -> Fund
         min_net_apr=float(raw.get("min_net_apr", 0.05)),
         poll_interval_sec=defaults["poll_interval_sec"],
         max_stale_sec=float(raw.get("max_stale_sec", 180.0)),
+        max_price_stale_sec=float(raw.get("max_price_stale_sec", 30.0)),
         spread_bucket_sec=float(raw.get("spread_bucket_sec", 300.0)),
         retention_days=float(raw.get("retention_days", 14.0)),
         walkforward_windows=int(raw.get("walkforward_windows", 7)),
         ref_size_usd=ref_size,
+        backfill_days=float(raw.get("backfill_days", 90.0)),
+        entry_grid_hours=float(raw.get("entry_grid_hours", 6.0)),
+        min_coverage=float(raw.get("min_coverage", 0.9)),
+        leverage=float(raw.get("leverage", 1.0)),
         venues_file=str(vpath),
     )

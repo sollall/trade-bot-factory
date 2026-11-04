@@ -64,11 +64,18 @@ class FakeHttp:
                 return fixture("hyperliquid_metaAndAssetCtxs")
             if req["type"] == "l2Book":
                 return fixture(f"hyperliquid_l2Book_{req['coin']}")
+            if req["type"] == "fundingHistory":
+                return fixture(f"hyperliquid_fundingHistory_{req['coin']}")
+            if req["type"] == "candleSnapshot":
+                return fixture(f"hyperliquid_candleSnapshot_{req['req']['coin']}")
         if "zklighter" in url:
             if "orderBookDetails" in url:
                 return fixture("lighter_orderBookDetails")
             if "funding-rates" in url:
                 return fixture("lighter_funding-rates")
+            if "fundings" in url:
+                mid = int(re.search(r"market_id=(\d+)", url).group(1))
+                return fixture(f"lighter_fundings_{'BTC' if mid == 1 else 'ETH'}")
             if "orderBookOrders" in url:
                 mid = int(re.search(r"market_id=(\d+)", url).group(1))
                 return fixture(f"lighter_orderBookOrders_{'BTC' if mid == 1 else 'ETH'}")
@@ -76,15 +83,28 @@ class FakeHttp:
             sym = "BTC" if "BTC" in url else "ETH"
             if "summary" in url:
                 return fixture(f"paradex_summary_{sym}")
+            if "klines" in url:
+                return fixture(f"paradex_klines_{sym}")
+            if "funding/data" in url:
+                # 実物と同じく「end_at 以前の直近 1 行」を返す (累積インデックスのサンプル)
+                rows = sorted(fixture(f"paradex_funding_data_{sym}")["results"], key=lambda r: r["created_at"])
+                m = re.search(r"end_at=(\d+)", url)
+                if m:
+                    rows = [r for r in rows if r["created_at"] <= int(m.group(1))]
+                return {"results": rows[-1:]}
             if "orderbook" in url:
                 return fixture(f"paradex_orderbook_{sym}")
         if "dydx" in url:
             sym = "BTC" if "BTC" in url else "ETH"
             if "perpetualMarkets" in url:
                 return fixture(f"dydx_market_{sym}")
+            if "historicalFunding" in url:
+                return fixture(f"dydx_historicalFunding_{sym}")
             if "orderbooks" in url:
                 return fixture(f"dydx_orderbook_{sym}")
         if "binance" in url:
+            if "fundingInfo" in url:
+                return fixture("binance_fundingInfo")
             return fixture(f"binance_premiumIndex_{'BTC' if 'BTCUSDT' in url else 'ETH'}")
         raise AssertionError(f"fixture がありません: {method} {url} {body}")
 
@@ -662,3 +682,400 @@ async def test_unknown_adapter_is_rejected():
     v = replace(cfg.venue("hyperliquid"), adapter="nope")
     with pytest.raises(VenueError, match="unknown adapter"):
         await client.fetch(v)
+
+
+HOUR = 3_600_000
+
+
+# ---------------------------------------------------------------- 建ての自動検証
+
+
+async def test_check_verifies_the_funding_interval_on_every_venue():
+    """建てを API 側から確かめる (レジストリにそう書いてあるでは不十分)
+
+    建てを取り違えると年率が 8 倍ずれる。Paradex だけ自動チェックがあり、
+    Lighter の検算は fixture に残っているだけ、dydx と Binance は無検証だった。
+    """
+    cfg, client, _ = cfg_and_client()
+    res = await check_all(client)
+    assert res.config_errors == []
+    # 全ての会場で API 側から建てが読めていること
+    assert res.api_intervals == {
+        "hyperliquid": 1.0,
+        "lighter": 8.0,
+        "paradex": 8.0,
+        "dydx": 1.0,
+        "binance": 8.0,
+    }
+
+
+async def test_check_fails_when_the_registry_interval_is_wrong():
+    """設定の建てを 8h -> 1h に変えたら、API との食い違いとして止まること"""
+    cfg, client, http = cfg_and_client()
+    broken = [replace(v, funding_interval_hours=1) if v.name == "lighter" else v for v in cfg.venues]
+    client.cfg = replace(cfg, venues=broken)
+    res = await check_all(client)
+    assert any("lighter" in e and "検証に失敗" in e for e in res.config_errors), res.config_errors
+    with pytest.raises(VenueError):
+        res.raise_for_check(client.cfg)
+
+
+async def test_binance_funding_interval_comes_from_funding_info():
+    """Binance は銘柄によって 8h / 4h がある。fundingInfo に出るのは既定と違う銘柄だけ"""
+    from tbf.funding.venues import Session, verify_binance
+
+    cfg, client, http = cfg_and_client()
+    v = cfg.venue("binance")
+    assert (await verify_binance(Session(http), v, "BTCUSDT")).hours == 8.0
+    # fixture に入れた 4h の銘柄は 4h として読めること (BTC と同じ既定にしない)
+    four = [r for r in fixture("binance_fundingInfo") if r["fundingIntervalHours"] == 4]
+    assert four, "4h の銘柄を fixture に入れておく"
+    assert (await verify_binance(Session(http), v, four[0]["symbol"])).hours == 4.0
+
+
+def test_hyperliquid_book_is_capped_at_20_levels():
+    """l2Book は片側 20 本までしか返さない。book_depth = 100 は効いていない"""
+    cfg = load_config(ROOT / "funding.toml", ROOT / "data" / "venues.toml")
+    hl = cfg.venue("hyperliquid")
+    assert hl.book_depth == 100 and hl.max_book_levels == 20
+    assert hl.effective_book_depth == 20
+    book = fixture("hyperliquid_l2Book_BTC")
+    assert len(book["levels"][0]) <= 20 and len(book["levels"][1]) <= 20
+    # 上限を宣言していない会場は book_depth のまま
+    assert cfg.venue("dydx").effective_book_depth == cfg.venue("dydx").book_depth
+
+
+# ---------------------------------------------------------------- 履歴 (確定ファンディング)
+
+
+def _fixture_window(venue):
+    """その会場の fixture に入っている時刻をちょうど覆う範囲 (ms)
+
+    fixture は会場ごとに別の時点で取ったものなので、範囲は会場ごとに出す。
+    (全部まとめると Paradex のサンプル点が 90 日ぶんになって遅い)
+    """
+    from datetime import datetime
+
+    if venue == "hyperliquid":
+        times = [int(f["time"]) for f in fixture("hyperliquid_fundingHistory_BTC")]
+    elif venue == "lighter":
+        times = [int(f["timestamp"]) * 1000 for f in fixture("lighter_fundings_BTC")["fundings"]]
+    elif venue == "paradex":
+        times = [int(r["created_at"]) for r in fixture("paradex_funding_data_BTC")["results"]]
+        times += [int(r[0]) for r in fixture("paradex_klines_BTC")["results"]]
+    elif venue == "dydx":
+        times = [
+            int(datetime.fromisoformat(f["effectiveAt"].replace("Z", "+00:00")).timestamp() * 1000)
+            for f in fixture("dydx_historicalFunding_BTC")["historicalFunding"]
+        ]
+    else:
+        raise AssertionError(venue)
+    return min(times) - HOUR, max(times) + HOUR
+
+
+async def test_history_normalizes_sign_and_interval_across_venues():
+    """会場ごとに建ても符号の表し方も違うので、「ロングが払うとき +」の 1 時間率に揃える"""
+    from tbf.funding.history import fetch_history
+    from tbf.funding.venues import Session
+
+    cfg, client, http = cfg_and_client()
+    for name in ("hyperliquid", "lighter", "paradex", "dydx"):
+        v = cfg.venue(name)
+        if name == "paradex":
+            # fixture は 2 点しか無いので、サンプル間隔を縮めて両方を踏ませる
+            v = replace(v, history_sample_hours=1.0)
+        lo, hi = _fixture_window(name)
+        points = await fetch_history(Session(http), v, "BTC", lo, hi)
+        assert points, name
+        assert all(p.hours > 0 for p in points), name
+        # fixture はどれも +10% 前後の平らな期間なので、年率が同じオーダーに乗ること
+        aprs = [p.apr for p in points]
+        assert 0.0 < sum(aprs) / len(aprs) < 0.5, (name, aprs[:3])
+        assert points == sorted(points, key=lambda p: p.time)
+
+
+async def test_lighter_history_sign_comes_from_direction():
+    """Lighter の /fundings は rate に符号を持たず direction で表す
+
+    ここを取り違えると支払い側と受け取り側が丸ごと入れ替わる。
+    同じレートで direction だけ変えたら符号が反転することを固定する。
+    """
+    from tbf.funding.history import history_lighter
+    from tbf.funding.venues import Session
+
+    cfg = load_config(ROOT / "funding.toml", ROOT / "data" / "venues.toml")
+    v = cfg.venue("lighter")
+
+    class Flipped(FakeHttp):
+        def __init__(self, direction):
+            super().__init__()
+            self.direction = direction
+
+        def _route(self, method, url, body):
+            payload = super()._route(method, url, body)
+            if "fundings" in url and "funding-rates" not in url:
+                payload = json.loads(json.dumps(payload))
+                for f in payload["fundings"]:
+                    f["direction"] = self.direction
+            return payload
+
+    assert all(f["direction"] == "long" for f in fixture("lighter_fundings_BTC")["fundings"])
+    lo, hi = _fixture_window("lighter")
+    longs = await history_lighter(Session(Flipped("long")), v, "BTC", lo, hi)
+    shorts = await history_lighter(Session(Flipped("short")), v, "BTC", lo, hi)
+    assert all(p.rate > 0 for p in longs)
+    assert all(p.rate < 0 for p in shorts)
+    assert [p.rate for p in longs] == [-p.rate for p in shorts]
+    # mark 価格は符号に関係なく同じ (value / |rate|)
+    assert [p.mark for p in longs] == [p.mark for p in shorts]
+
+
+async def test_paradex_history_uses_the_cumulative_index():
+    """Paradex は連続課金。累積 funding_index の差を mark で割ると分数になる"""
+    from tbf.funding.history import history_paradex
+    from tbf.funding.venues import Session
+
+    cfg, client, http = cfg_and_client()
+    v = cfg.venue("paradex")
+    lo, hi = _fixture_window("paradex")
+    points = await history_paradex(Session(http), v, "BTC-USD-PERP", lo, hi, sample_hours=1.0)
+    rows = fixture("paradex_funding_data_BTC")["results"]
+    rows = sorted(rows, key=lambda r: r["created_at"])
+    mark = float(fixture("paradex_klines_BTC")["results"][0][4])
+    expected = (float(rows[-1]["funding_index"]) - float(rows[0]["funding_index"])) / mark
+    assert len(points) == len(rows) - 1
+    assert sum(p.rate for p in points) == pytest.approx(expected, rel=1e-6)
+    # funding_rate_8h と同じオーダーに乗ること (建てを取り違えていないことの確認)
+    quoted_8h = float(rows[-1]["funding_rate_8h"])
+    per_8h = sum(p.rate for p in points) / sum(p.hours for p in points) * 8
+    assert 0.2 < per_8h / quoted_8h < 5, (per_8h, quoted_8h)
+
+
+def test_history_round_trips_through_the_store(tmp_path):
+    from tbf.funding.history import FundingPoint
+
+    store = FundingStore(tmp_path / "f.sqlite", 300.0)
+    pts = [FundingPoint(3_600_000 * i, 1.0, 1e-5 * i, 100.0 + i) for i in range(1, 5)]
+    assert store.add_history("hyperliquid", "BTC", pts) == 4
+    # 同じ時刻は上書き (backfill を何度流しても増えない)
+    store.add_history("hyperliquid", "BTC", pts)
+    got = store.history(0, 1 << 62)
+    assert list(got) == [("hyperliquid", "BTC")]
+    assert [p.rate for p in got[("hyperliquid", "BTC")]] == [p.rate for p in pts]
+    (cov,) = store.history_coverage()
+    assert (cov["n"], cov["marks"]) == (4, 4)
+
+
+# ---------------------------------------------------------------- 確定ファンディングでの主指標
+
+
+def _points(start_hour, hourly_rates, mark=100.0):
+    """1 時間刻みの確定ファンディングを作る"""
+    from tbf.funding.history import FundingPoint
+
+    marks = mark if isinstance(mark, list) else [mark] * len(hourly_rates)
+    return [
+        FundingPoint((start_hour + i + 1) * HOUR, 1.0, r, marks[i])
+        for i, r in enumerate(hourly_rates)
+    ]
+
+
+def test_realized_sums_actual_funding_instead_of_extrapolating():
+    """主指標は「実際に確定したファンディングの合計 − 往復コスト」
+
+    ライブの net_apr は「今の予測レートが hold 日続く」という外挿なので、
+    途中でレートが変わった期間の損益は再現しない。
+    """
+    from tbf.funding.realized import build_series, realize
+
+    hours = 48
+    # 前半は年率 +36.5% 相当 (1e-4/h) だが、後半は 0 に落ちる
+    short = [1e-4] * 24 + [0.0] * 24
+    series = build_series({("a", "BTC"): _points(0, short), ("b", "BTC"): _points(0, [0.0] * hours)})
+    t = realize(series, ("a", "b", "BTC"), 0, 2.0, cost_bps=0.0)
+    # 実際に確定したのは 24 時間ぶんの 1e-4 = 24bps
+    assert t.gross == pytest.approx(24e-4)
+    assert t.net_apr == pytest.approx(24e-4 * 365 / 2)
+    # 建てた瞬間のレート (1e-4/h = 年率 87.6%) をそのまま伸ばすと倍の見込みになる
+    assert t.net_apr < 1e-4 * 24 * 365 * 0.6
+
+    # 往復コストは保有期間 1 回ぶんだけ引く (年率に按分しない)
+    with_cost = realize(series, ("a", "b", "BTC"), 0, 2.0, cost_bps=12.0)
+    assert with_cost.net == pytest.approx(t.gross - 12.0 / 10_000)
+
+
+def test_realized_skips_entries_without_enough_coverage():
+    from tbf.funding.realized import build_series, realize
+
+    # ロング側は後半 24 時間ぶんのデータが無い
+    series = build_series(
+        {("a", "BTC"): _points(0, [1e-4] * 48), ("b", "BTC"): _points(0, [0.0] * 24)}
+    )
+    assert realize(series, ("a", "b", "BTC"), 0, 2.0, 0.0, min_coverage=0.9) is None
+    partial = realize(series, ("a", "b", "BTC"), 0, 2.0, 0.0, min_coverage=0.4)
+    assert partial is not None and partial.coverage == pytest.approx(0.5)
+
+
+def test_realized_basis_is_the_relative_price_move_and_stays_out_of_net():
+    """basis は「建てた瞬間の水準」ではなく「保有期間中の変化」が損益になる"""
+    from tbf.funding.realized import build_series, realize
+
+    # ショート側は動かず、ロング側が 1% 上がる -> ロング脚の含み益
+    series = build_series(
+        {
+            ("a", "BTC"): _points(0, [0.0] * 24, mark=[100.0] * 24),
+            ("b", "BTC"): _points(0, [0.0] * 24, mark=[100.0] * 12 + [101.0] * 12),
+        }
+    )
+    t = realize(series, ("a", "b", "BTC"), 0, 1.0, cost_bps=0.0)
+    assert t.basis_pnl == pytest.approx(0.01, abs=1e-9)
+    # net には入れない (依頼票の式どおり)。合計は別に出す
+    assert t.net == pytest.approx(0.0)
+    assert t.net_apr_with_basis == pytest.approx(0.01 * 365)
+
+
+def test_walkforward_window_equals_the_hold_period():
+    """窓の長さと保有期間を一致させる
+
+    以前は窓 1 日なのに保有 14 日としてコストを按分していて、
+    評価している期間と保有期間が一致していなかった。
+    """
+    from tbf.funding.realized import build_series, walkforward_realized
+
+    hold = 1.0
+    series = build_series(
+        {
+            ("a", "BTC"): _points(0, [1e-4] * 96),
+            ("b", "BTC"): _points(0, [0.0] * 96),
+        }
+    )
+    wins = walkforward_realized(series, [("a", "b", "BTC")], 0, 96 * HOUR, hold, {}, 0.0)
+    assert [w.hold_days for w in wins] == [hold] * len(wins)
+    for w in wins:
+        assert w.end - w.start == int(hold * 24) * HOUR
+
+
+def test_walkforward_charges_the_switch_cost_only_when_the_pair_changes():
+    """乗り換えコストを課さないと、ペアが頻繁に入れ替わるほど OOS が良く見える"""
+    from tbf.funding.realized import build_series, walkforward_realized
+
+    hold = 1.0
+    cost = {("a", "b", "BTC"): 100.0, ("b", "a", "BTC"): 100.0}
+    # a は 1 日目だけ高く、2 日目以降は b のほうが高い -> 窓ごとに最良ペアが入れ替わる
+    a = [2e-4] * 24 + [0.0] * 24 + [0.0] * 24 + [0.0] * 24
+    b = [0.0] * 24 + [2e-4] * 24 + [2e-4] * 24 + [2e-4] * 24
+    series = build_series({("a", "BTC"): _points(0, a), ("b", "BTC"): _points(0, b)})
+    keys = [("a", "b", "BTC"), ("b", "a", "BTC")]
+    wins = walkforward_realized(series, keys, 0, 96 * HOUR, hold, cost, 100.0)
+    switched = [w for w in wins if w.picked and w.switched]
+    kept = [w for w in wins if w.picked and not w.switched]
+    assert switched, "ペアが入れ替わる窓があること"
+    assert kept, "同じペアを持ち続ける窓があること"
+    # 乗り換えた窓は往復 100bps を引かれ、持ち続けた窓は引かれない
+    for w in switched:
+        assert w.oos_net_apr == pytest.approx((w.oos_gross_apr or 0) - 100.0 / 10_000 * 365 / hold)
+    for w in kept:
+        assert w.oos_net_apr == pytest.approx(w.oos_gross_apr)
+
+
+def test_walkforward_efficiency_compares_oos_with_hindsight():
+    from tbf.funding.realized import build_series, walkforward_realized
+
+    hold = 1.0
+    a = [1e-4] * 24 + [1e-4] * 24 + [0.0] * 24
+    b = [0.0] * 24 + [0.0] * 24 + [3e-4] * 24
+    series = build_series({("a", "BTC"): _points(0, a), ("b", "BTC"): _points(0, b)})
+    keys = [("a", "b", "BTC"), ("b", "a", "BTC")]
+    wins = walkforward_realized(series, keys, 0, 72 * HOUR, hold, {}, 0.0)
+    last = wins[-1]
+    # 前の窓の最良 (a ショート) を持ったが、この窓の最良は反対側だった
+    assert last.picked == ("a", "b", "BTC")
+    assert last.best == ("b", "a", "BTC")
+    assert last.efficiency is not None and last.efficiency < 0
+
+
+def test_capital_apr_halves_at_full_collateral():
+    """net_apr は片脚の建玉に対する率。資本は 2 会場ぶん必要"""
+    from tbf.funding.realized import capital_apr
+
+    assert capital_apr(0.10, leverage=1.0) == pytest.approx(0.05)
+    assert capital_apr(0.10, leverage=2.0) == pytest.approx(0.10)
+    with pytest.raises(ValueError):
+        capital_apr(0.10, leverage=0)
+
+
+# ---------------------------------------------------------------- 価格の鮮度
+
+
+def test_stale_prices_are_excluded_from_pairs():
+    """ファンディングは 3 分古くても困らないが、価格差とスリッページは混ぜられない"""
+    from tbf.funding.spread import stale_price_venues
+
+    cfg = load_config(ROOT / "funding.toml", ROOT / "data" / "venues.toml")
+    assert cfg.max_price_stale_sec < cfg.max_stale_sec
+    now = 10_000_000
+    fresh = _snap("hyperliquid", "BTC", 0.20)
+    fresh = replace(fresh, time=now - 5_000)
+    old = replace(_snap("lighter", "BTC", 0.02), time=now - 120_000)
+    # max_stale_sec (180s) では両方生きているが、価格の鮮度 (30s) では lighter は古い
+    assert stale_price_venues([fresh, old], cfg, now) == {"lighter"}
+    spreads, _ = evaluate([fresh, old], cfg, now)
+    assert spreads == []
+    # 鮮度を緩めればペアになる
+    spreads, _ = evaluate([fresh, old], replace(cfg, max_price_stale_sec=300), now)
+    assert spreads
+
+
+def test_spread_records_the_fetch_time_lag():
+    cfg = load_config(ROOT / "funding.toml", ROOT / "data" / "venues.toml")
+    now = 10_000_000
+    a = replace(_snap("hyperliquid", "BTC", 0.20), time=now)
+    b = replace(_snap("lighter", "BTC", 0.02), time=now - 7_000)
+    spreads, _ = evaluate([a, b], cfg, now)
+    assert spreads and all(s.lag_ms == 7_000 for s in spreads)
+
+
+def test_stale_data_holds_the_episode_open_instead_of_splitting_it():
+    """片方の会場のデータが古くなっただけで閉じると、最長継続時間が短く出る"""
+    tr = EpisodeTracker(min_net_apr=0.05, hold_days=14.0, max_pending_sec=180.0)
+    tr.update(0, [_spread_at(0.10)])
+    # a のデータが古くなって計算から外れた -> 閉じずに保留
+    assert tr.update(60_000, [], stale_venues={"a"}) == []
+    assert tr.update(120_000, [], stale_venues={"a"}) == []
+    # 戻ってきたら同じエピソードとして続く (別エピソードにしない)
+    assert tr.update(180_000, [_spread_at(0.10)]) == []
+    (ep,) = tr.update(240_000, [_spread_at(0.01)])
+    assert ep.start == 0 and ep.end == 180_000
+    assert ep.duration_sec == 180.0
+    assert ep.pending_polls == 2
+
+    # 閾値を割ったとき (データはある) は従来どおり閉じる
+    tr2 = EpisodeTracker(min_net_apr=0.05, hold_days=14.0)
+    tr2.update(0, [_spread_at(0.10)])
+    assert len(tr2.update(60_000, [_spread_at(0.01)])) == 1
+
+    # 保留の上限を超えたら閉じる (ずっと見えないものを続いていたとは言えない)
+    tr3 = EpisodeTracker(min_net_apr=0.05, hold_days=14.0, max_pending_sec=60.0)
+    tr3.update(0, [_spread_at(0.10)])
+    assert tr3.update(30_000, [], stale_venues={"a"}) == []
+    assert len(tr3.update(120_000, [], stale_venues={"a"})) == 1
+
+
+def test_efficiency_never_exceeds_hindsight_when_holding_pays_no_cost():
+    """後から見た最良も「今持っているペアはコストなし」の土台で選ぶ
+
+    OOS 側だけ乗り換えコストを免除すると、持ち続けた窓で OOS > 後見最良 になり
+    効率が 100% を超えてしまう (良く見えるだけで、比として意味がない)。
+    """
+    from tbf.funding.realized import build_series, walkforward_realized
+
+    hold = 1.0
+    cost = {("a", "b", "BTC"): 200.0, ("b", "a", "BTC"): 200.0}
+    # a ショートがずっと最良。ただし 3 日目は差が小さくなる
+    a = [2e-4] * 24 + [2e-4] * 24 + [2e-6] * 24
+    series = build_series({("a", "BTC"): _points(0, a), ("b", "BTC"): _points(0, [0.0] * 72)})
+    keys = [("a", "b", "BTC"), ("b", "a", "BTC")]
+    wins = walkforward_realized(series, keys, 0, 72 * HOUR, hold, cost, 200.0)
+    effs = [w.efficiency for w in wins if w.efficiency is not None]
+    assert effs, "効率の出る窓があること"
+    assert all(e <= 1.0 + 1e-9 for e in effs), effs

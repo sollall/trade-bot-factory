@@ -27,6 +27,11 @@ liquidation_bps = 0.0
 fee_source = "doc: 公開手数料表の最下位 tier (taker 0.045% / maker 0.015%)。口座の tier で下がる"
 poll_interval_sec = 15
 book_depth = 100
+# l2Book は片側 20 本までしか返さない (リクエストで増やせない)。
+# BTC/ETH なら 20 本でも数百万ドル分あるので今のサイズでは問題にならないが、
+# 板の薄い銘柄を足すとこの会場だけ偽の「板不足」が出る。そのときは nSigFigs で
+# 価格をまとめて取るか、この会場だけサイズの上限を下げる必要がある。
+max_book_levels = 20
 region_restricted = ["US"]
 points_program = "シーズン制のポイント。自己売買由来の扱いは要確認"
 symbols = { BTC = "BTC", ETH = "ETH" }
@@ -44,7 +49,7 @@ funding_interval_hours = 8
 taker_bps = 0.0
 maker_bps = 0.0
 liquidation_bps = 100.0
-fee_source = "api: /api/v1/orderBookDetails の taker_fee / maker_fee が 0.0000、liquidation_fee 1.0000"
+fee_source = "api: /api/v1/orderBookDetails の taker_fee / maker_fee が 0.0000、liquidation_fee 1.0000。ただしこれは Standard 口座の条件。bot で使う口座が Premium だと taker 手数料がかかるはずなので、資金を入れる前に口座種別で要再確認"
 poll_interval_sec = 15
 book_depth = 200   # orderBookOrders の limit 上限は 200
 region_restricted = ["US"]
@@ -59,6 +64,10 @@ base_url = "https://api.prod.paradex.trade"
 # markets/summary が funding_interval_minutes を返すので、設定値と突き合わせる
 funding_interval_hours = 8
 api_interval_field = "funding_interval_minutes"
+# Paradex のファンディングは連続課金で、8h は表示上の決めごと。
+# 履歴は /v1/funding/data の累積 funding_index の差で取るので、
+# この時間ごとにインデックスをサンプルする (レートを足し合わせるより正確)。
+history_sample_hours = 8
 taker_bps = 2.0
 maker_bps = 0.0
 liquidation_bps = 0.0

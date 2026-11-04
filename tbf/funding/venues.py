@@ -13,6 +13,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
 from tbf.funding.config import FundingConfig, VenueConfig
@@ -134,7 +135,7 @@ async def fetch_hyperliquid(s: Session, v: VenueConfig, symbols: list[str]) -> d
             raise VenueError(f"{native} is not in the universe")
         c = ctxs[idx[native]]
         book = await s.json("POST", v.base_url, json.dumps({"type": "l2Book", "coin": native}))
-        bids, asks = book["levels"][0][: v.book_depth], book["levels"][1][: v.book_depth]
+        bids, asks = book["levels"][0][: v.effective_book_depth], book["levels"][1][: v.effective_book_depth]
         out[sym] = SymbolSnapshot(
             symbol=sym,
             raw_rate=float(c["funding"]),
@@ -163,7 +164,7 @@ async def fetch_lighter(s: Session, v: VenueConfig, symbols: list[str]) -> dict[
             raise VenueError(f"{native} status={d.get('status')}")
         if r is None:
             raise VenueError(f"{native} has no lighter funding rate")
-        book = await s.json("GET", f"{v.base_url}/api/v1/orderBookOrders?market_id={d['market_id']}&limit={v.book_depth}")
+        book = await s.json("GET", f"{v.base_url}/api/v1/orderBookOrders?market_id={d['market_id']}&limit={v.effective_book_depth}")
         _check_lighter_code(book)
         out[sym] = SymbolSnapshot(
             symbol=sym,
@@ -192,7 +193,7 @@ async def fetch_paradex(s: Session, v: VenueConfig, symbols: list[str]) -> dict[
         if not res:
             raise VenueError(f"{native} has no summary")
         m = res[0]
-        book = await s.json("GET", f"{v.base_url}/v1/orderbook/{native}?depth={v.book_depth}")
+        book = await s.json("GET", f"{v.base_url}/v1/orderbook/{native}?depth={v.effective_book_depth}")
         minutes = m.get("funding_interval_minutes")
         out[sym] = SymbolSnapshot(
             symbol=sym,
@@ -222,8 +223,8 @@ async def fetch_dydx(s: Session, v: VenueConfig, symbols: list[str]) -> dict[str
             interval_hours=v.funding_interval_hours,
             mark=float(m["oraclePrice"]),
             book=Book(
-                _levels(book["bids"][: v.book_depth], "price", "size", True),
-                _levels(book["asks"][: v.book_depth], "price", "size", False),
+                _levels(book["bids"][: v.effective_book_depth], "price", "size", True),
+                _levels(book["asks"][: v.effective_book_depth], "price", "size", False),
             ),
         )
     return out
@@ -242,6 +243,119 @@ async def fetch_binance(s: Session, v: VenueConfig, symbols: list[str]) -> dict[
             mark=float(m["markPrice"]),
         )
     return out
+
+
+# ------------------------------------------------------------------ 建ての検証
+#
+# レートの建て (1h / 8h) を取り違えるのがこのスクリーナーで一番効く事故で、
+# 間違えると年率が 8 倍ずれる。「レジストリにそう書いてある」では不十分なので、
+# check のたびに API 側から建てを確かめる。
+#
+# 会場ごとに確かめ方が違う:
+#   hyperliquid / dydx  履歴の支払い間隔が 1 時間であること
+#   lighter             funding-rates の値 / 8 == fundings (1h) の値 であること
+#   binance             fundingInfo の fundingIntervalHours (銘柄ごとに 8h / 4h / 1h がある)
+#   paradex             markets/summary の funding_interval_minutes (既存の api_interval_field)
+
+
+@dataclass(frozen=True)
+class IntervalCheck:
+    venue: str
+    # API 側から読めた建て (時間)。読めなければ None
+    hours: Optional[float]
+    note: str = ""
+    error: Optional[str] = None
+
+
+def _spacing_hours(times_ms: list[int]) -> Optional[float]:
+    """支払い時刻の並びから間隔 (時間) を出す。ばらつきは秒に丸めて見る"""
+    ts = sorted(times_ms)
+    gaps = [round((b - a) / 1000) for a, b in zip(ts, ts[1:])]
+    gaps = [g for g in gaps if g > 0]
+    if not gaps:
+        return None
+    # 記録時刻に数十 ms のばらつきがあるので最頻値を使う
+    common = max(set(gaps), key=gaps.count)
+    return common / 3600
+
+
+async def verify_hyperliquid(s: Session, v: VenueConfig, native: str) -> IntervalCheck:
+    start = int(time.time() * 1000) - 12 * 3_600_000
+    rows = await s.json("POST", v.base_url, json.dumps({"type": "fundingHistory", "coin": native, "startTime": start}))
+    hours = _spacing_hours([int(r["time"]) for r in rows]) if rows else None
+    return IntervalCheck(v.name, hours, f"fundingHistory {len(rows)} 件の支払い間隔")
+
+
+async def verify_dydx(s: Session, v: VenueConfig, native: str) -> IntervalCheck:
+    rows = (await s.json("GET", f"{v.base_url}/v4/historicalFunding/{native}?limit=12")).get("historicalFunding") or []
+    times = []
+    for r in rows:
+        try:
+            times.append(int(datetime.fromisoformat(r["effectiveAt"].replace("Z", "+00:00")).timestamp() * 1000))
+        except (KeyError, ValueError):
+            pass
+    return IntervalCheck(v.name, _spacing_hours(times), f"historicalFunding {len(rows)} 件の支払い間隔")
+
+
+async def verify_lighter(s: Session, v: VenueConfig, native: str) -> IntervalCheck:
+    """funding-rates の rate を /fundings (1 時間あたりの％) で検算する
+
+    fixture に残すだけでは、会場側が建てを変えたときに気づけない。
+    """
+    details = await s.json("GET", f"{v.base_url}/api/v1/orderBookDetails")
+    _check_lighter_code(details)
+    mid = next((int(d["market_id"]) for d in details["order_book_details"] if d["symbol"] == native), None)
+    if mid is None:
+        return IntervalCheck(v.name, None, error=f"{native} is not listed")
+    rates = await s.json("GET", f"{v.base_url}/api/v1/funding-rates")
+    _check_lighter_code(rates)
+    quoted = next(
+        (float(r["rate"]) for r in rates["funding_rates"] if r.get("exchange") == "lighter" and r["symbol"] == native),
+        None,
+    )
+    now = int(time.time())
+    page = await s.json(
+        "GET",
+        f"{v.base_url}/api/v1/fundings?market_id={mid}&resolution=1h"
+        f"&start_timestamp={now - 12 * 3600}&end_timestamp={now}&count_back=12",
+    )
+    _check_lighter_code(page)
+    rows = page.get("fundings") or []
+    if quoted is None or not rows:
+        return IntervalCheck(v.name, None, error="funding-rates か fundings が空で検算できません")
+    # /fundings は符号を持たず direction で表すので、検算は絶対値で行う
+    hourly = [abs(float(r["rate"])) / 100.0 for r in rows]
+    avg_hourly = sum(hourly) / len(hourly)
+    spacing = _spacing_hours([int(r["timestamp"]) * 1000 for r in rows])
+    if spacing is not None and abs(spacing - 1.0) > 1e-6:
+        return IntervalCheck(v.name, None, error=f"fundings の間隔が 1h ではありません ({spacing}h)")
+    if avg_hourly <= 0:
+        return IntervalCheck(v.name, None, note="fundings のレートが 0 で建てを判定できません")
+    implied = abs(quoted) / avg_hourly
+    # funding-rates が 8 時間ぶんなら implied ≈ 8。レートは時間で動くので幅を持たせる
+    note = f"funding-rates {quoted:+.3e} / fundings(1h) 平均 {avg_hourly:.3e} -> 建て {implied:.1f}h 相当"
+    if abs(implied - v.funding_interval_hours) > v.funding_interval_hours * 0.5:
+        return IntervalCheck(v.name, implied, note, error=f"検算が合いません ({note})")
+    return IntervalCheck(v.name, v.funding_interval_hours, note)
+
+
+async def verify_binance(s: Session, v: VenueConfig, native: str) -> IntervalCheck:
+    """銘柄によって 8h / 4h / 1h がある。fundingInfo に出るのは既定と違う銘柄だけ"""
+    rows = await s.json("GET", f"{v.base_url}/fapi/v1/fundingInfo")
+    hit = next((r for r in rows if r.get("symbol") == native), None)
+    if hit is None:
+        return IntervalCheck(v.name, 8.0, f"{native} は fundingInfo に無い -> 既定の 8h")
+    return IntervalCheck(v.name, float(hit["fundingIntervalHours"]), f"fundingInfo の fundingIntervalHours")
+
+
+Verifier = Callable[[Session, VenueConfig, str], Awaitable[IntervalCheck]]
+
+VERIFIERS: dict[str, Verifier] = {
+    "hyperliquid": verify_hyperliquid,
+    "dydx": verify_dydx,
+    "lighter": verify_lighter,
+    "binance": verify_binance,
+}
 
 
 Adapter = Callable[[Session, VenueConfig, list[str]], Awaitable[dict[str, SymbolSnapshot]]]
@@ -276,6 +390,15 @@ class VenueClient:
         finally:
             self.last[v.name] = (s.latency_ms, s.calls, s.rate_limited)
         return VenueSnapshot(v.name, self.clock(), s.latency_ms, s.calls, symbols)
+
+    async def verify_interval(self, v: VenueConfig) -> Optional[IntervalCheck]:
+        """API 側からファンディングの建てを確かめる (check のときだけ)"""
+        verifier = VERIFIERS.get(v.adapter)
+        syms = self.symbols_for(v)
+        if verifier is None or not syms:
+            return None
+        s = Session(self.http)
+        return await verifier(s, v, v.symbols[syms[0]])
 
 
 @dataclass
@@ -322,7 +445,7 @@ class CheckResult:
             )
 
 
-async def check_all(client: VenueClient) -> CheckResult:
+async def check_all(client: VenueClient, verify_intervals: bool = True) -> CheckResult:
     """設定した会場に実際につながるか・記号が存在するか・建てが設定と合っているかを確かめる
 
     ここでは投げない。呼び出し側が raise_for_check / raise_for_run で厳しさを選ぶ。
@@ -334,6 +457,32 @@ async def check_all(client: VenueClient) -> CheckResult:
     config_errors: list[str] = []
     ok: set[str] = set()
     api_intervals: dict[str, float] = {}
+    verified: dict[str, IntervalCheck] = {}
+    if verify_intervals:
+        checks = await asyncio.gather(
+            *(client.verify_interval(v) for v in cfg.venues), return_exceptions=True
+        )
+        for v, c in zip(cfg.venues, checks):
+            if isinstance(c, BaseException):
+                lines.append(f"[建て] {v.name:>12}: 検証できませんでした ({type(c).__name__}: {c})")
+                continue
+            if c is None:
+                continue
+            verified[v.name] = c
+            if c.error:
+                config_errors.append(f"{v.name}: 建ての検証に失敗 — {c.error}")
+            elif c.hours is None:
+                lines.append(f"[建て] {v.name:>12}: API から建てを読めませんでした ({c.note})")
+            else:
+                api_intervals[v.name] = c.hours
+                mark = "OK" if abs(c.hours - v.funding_interval_hours) < 1e-6 else "NG"
+                line = f"[建て] {v.name:>12}: {mark} 設定 {v.funding_interval_hours:g}h / API {c.hours:g}h  ({c.note})"
+                lines.append(line)
+                if mark == "NG":
+                    config_errors.append(
+                        f"{v.name}: funding_interval_hours の食い違い "
+                        f"(設定 {v.funding_interval_hours}h / API {c.hours}h) — 年率が {c.hours / v.funding_interval_hours:.1f} 倍ずれます"
+                    )
     for v, r in zip(cfg.venues, results):
         tag = "参照" if v.reference_only else "対象"
         if isinstance(r, BaseException):
@@ -350,6 +499,19 @@ async def check_all(client: VenueClient) -> CheckResult:
                     f" 板 bid {len(book.bids)}本/${_notional(book.bids):,.0f}"
                     f" ask {len(book.asks)}本/${_notional(book.asks):,.0f}"
                 )
+                # 返ってきた本数が上限に張り付いているなら、板はそこで切れている。
+                # 見えている金額が測りたいサイズに足りていれば実害はないが、
+                # 銘柄を増やすとこの会場だけ偽の「板不足」が出るので必ず見えるようにする
+                cap = v.effective_book_depth
+                if cap and max(len(book.bids), len(book.asks)) >= cap:
+                    visible = min(_notional(book.bids), _notional(book.asks))
+                    need = max(cfg.sizes_usd)
+                    depth += f" (上限 {cap} 本で打ち切り"
+                    depth += (
+                        f" — 見えているのは ${visible:,.0f} までで、測りたい ${need:,.0f} に足りません)"
+                        if visible < need
+                        else ")"
+                    )
             lines.append(
                 f"[{tag}] {v.name:>12} {sym:<4} funding {snap.raw_rate:+.8f}/{snap.interval_hours:g}h"
                 f" -> 年率 {snap.funding_apr * 100:+7.2f}%  mark {snap.mark:,.2f}{depth}"

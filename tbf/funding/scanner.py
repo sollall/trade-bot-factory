@@ -13,7 +13,7 @@ import time
 from typing import Callable, Optional
 
 from tbf.funding.config import FundingConfig, VenueConfig
-from tbf.funding.spread import EpisodeTracker, evaluate
+from tbf.funding.spread import EpisodeTracker, evaluate, stale_price_venues
 from tbf.funding.store import FundingStore
 from tbf.funding.venues import VenueClient, VenueSnapshot
 
@@ -40,7 +40,7 @@ class Scanner:
         self.store = store
         self.clock = clock
         self.log = log
-        self.tracker = EpisodeTracker(cfg.min_net_apr, cfg.rank_hold_days)
+        self.tracker = EpisodeTracker(cfg.min_net_apr, cfg.rank_hold_days, cfg.max_stale_sec)
         self.latest: dict[str, VenueSnapshot] = {}
         self.next_due: dict[str, int] = {v.name: 0 for v in cfg.venues}
         self.closed_episodes = 0
@@ -73,12 +73,15 @@ class Scanner:
                 self.store.add_funding(now, v.name, sym, snap.funding_apr)
 
         fresh = [s for s in self.latest.values() if now - s.time <= self.cfg.max_stale_sec * 1000]
-        spreads, misses = evaluate(fresh, self.cfg)
+        # 価格・板はもっと短い鮮度で切る (basis とスリッページは同時刻の板でないと意味がない)
+        usable = {s.venue for s in fresh} - stale_price_venues(fresh, self.cfg, now)
+        stale = {v.name for v in self.cfg.venues} - usable
+        spreads, misses = evaluate(fresh, self.cfg, now)
         for s in spreads:
             self.store.add_spread(now, s)
         for m in misses:
             self.store.add_depth_miss(now, m)
-        for ep in self.tracker.update(now, spreads):
+        for ep in self.tracker.update(now, spreads, stale):
             self.store.add_episode(ep)
             self.closed_episodes += 1
             self.log(
