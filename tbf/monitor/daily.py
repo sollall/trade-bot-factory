@@ -12,6 +12,7 @@ import csv
 import datetime as dt
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -50,6 +51,13 @@ UNIVERSE_SNAPSHOT_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "reports", "monitoring", "hl_perp_universe.json"
 )
 RUN_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "reports", "monitoring", "run_log.json")
+REPO_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+STATE_FILES = [
+    "reports/monitoring/hl_perp_universe.json",
+    "reports/monitoring/run_log.json",
+    "reports/monitoring/daily.csv",
+]
+COMMIT_STATE_ITEM_ID = "_state-commit"
 
 # TRA-11 monitoring-watchlist のトリガー値 (このファイルでは変更しない。変更は文書のオーナーの仕事)
 AAVE_BASELINE_7D = {"ethereum": 67, "arbitrum": 76, "base": 88}  # Day-1 (2026-11-03) 実測
@@ -121,6 +129,30 @@ def record_item_outcome(run_log: dict, item_id: str, date_utc: str, ok: bool) ->
 def _prev_day(date_utc: str) -> str:
     d = dt.date.fromisoformat(date_utc)
     return (d - dt.timedelta(days=1)).isoformat()
+
+
+def commit_monitoring_state(date_utc: str) -> tuple[bool, str]:
+    """reports/monitoring の状態ファイル3本を1runあたり1コミットでローカルに記録する。pushはしない。
+
+    失敗しても例外を投げない（監視結果の出力を中断させないため）。
+    """
+    try:
+        subprocess.run(
+            ["git", "add", *STATE_FILES],
+            cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+        )
+        res = subprocess.run(
+            ["git", "commit", "-m", f"monitor: {date_utc} 定点観測ログ"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if res.returncode != 0:
+            combined = (res.stdout + res.stderr)
+            if "nothing to commit" in combined:
+                return True, "変更なし（コミット不要）"
+            return False, combined.strip()[:500]
+        return True, res.stdout.strip()
+    except Exception as e:  # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
 
 
 async def aave_liquidation_window_with_rotation(
@@ -384,16 +416,16 @@ async def run(fake_date_utc: str | None = None) -> tuple[list[it.ItemResult], li
     return results, fired, escalations
 
 
-def append_csv(results: list[it.ItemResult], date_utc: str) -> None:
+def append_csv(results: list[it.ItemResult], date_utc: str, run_ts_utc: str) -> None:
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
     write_header = not os.path.exists(CSV_PATH)
     with open(CSV_PATH, "a", newline="") as f:
         w = csv.writer(f)
         if write_header:
-            w.writerow(["date_utc", "item_id", "value", "unit", "source", "note"])
+            w.writerow(["date_utc", "item_id", "value", "unit", "source", "note", "run_ts_utc"])
         for r in results:
             if r.ok:
-                w.writerow([date_utc, r.item_id, r.value, r.unit, r.endpoint, r.note])
+                w.writerow([date_utc, r.item_id, r.value, r.unit, r.endpoint, r.note, run_ts_utc])
 
 
 def main() -> None:
@@ -401,10 +433,11 @@ def main() -> None:
     if "--fake-date" in sys.argv:
         fake_date = sys.argv[sys.argv.index("--fake-date") + 1]
 
+    run_ts_utc = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     results, fired, escalations = asyncio.run(run(fake_date))
     date_utc = fake_date or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     if fake_date is None:
-        append_csv(results, date_utc)
+        append_csv(results, date_utc, run_ts_utc)
 
     n_items = len({r.item_id.split("-monthly-")[0] for r in results})
     print(f"=== {date_utc} 定点観測{' (ドライラン: CSV書き込みなし)' if fake_date else ''} ===")
@@ -423,6 +456,21 @@ def main() -> None:
     for r in results:
         status = "OK" if r.ok else "FAIL"
         print(f"[{status}] {r.item_id} value={r.value} unit={r.unit} note={r.note} error={r.error} endpoint={r.endpoint}")
+
+    if fake_date is None:
+        commit_ok, commit_msg = commit_monitoring_state(date_utc)
+        run_log = load_run_log()
+        two_run_fail = record_item_outcome(run_log, COMMIT_STATE_ITEM_ID, date_utc, ok=commit_ok)
+        save_run_log(run_log)
+        if not commit_ok:
+            print(f"--- 記録未保全: reports/monitoring の状態ファイルのコミットに失敗 ({commit_msg}) ---")
+            if two_run_fail:
+                print("--- 【上申候補】記録未保全が2run連続。リーダー宛てissue1本で上げる対象 ---")
+                print(
+                    "監視項目: 定点観測ログの保全 / 実測値: 記録未保全が2run連続 / "
+                    "取得元: git commit (ローカル、未push) / "
+                    "覆る決定: 保全ルーチンの見直しが必要かリーダーが判断する"
+                )
 
 
 if __name__ == "__main__":
