@@ -1,0 +1,118 @@
+# 会場レジストリ (一次情報)
+#
+# TRA-9 がこのファイルを「公開APIエンドポイント・手数料・ポイント規則・地域制限の一次情報レジストリ」として
+# 整備する予定。tbf/funding はこのスキーマを読む。会場を増やすときはここに [[venues]] を足すだけで、
+# adapter が既存のものなら Python の変更は不要。
+#
+# 重要: funding_interval_hours は「その会場の API が返すレートが何時間ぶんか」。
+# 会場ごとに違い (1h / 8h)、ここを間違えると年率が 8 倍ずれる。
+# api_interval_field が設定されている会場は、API が返す建てと設定値を check / run で突き合わせる。
+#
+# 手数料は「API で確認できたもの (api)」と「公開ドキュメント由来 (doc)」を fee_source で区別する。
+# doc のものは自分の口座の tier で変わるので、実資金を入れる前に口座で再確認が必要。
+
+schema_version = 1
+
+# ---------------------------------------------------------------- perp DEX (取引対象候補)
+
+[[venues]]
+name = "hyperliquid"
+adapter = "hyperliquid"
+base_url = "https://api.hyperliquid.xyz/info"
+# metaAndAssetCtxs の funding は 1 時間ぶん (fundingHistory も 1 時間刻み)
+funding_interval_hours = 1
+taker_bps = 4.5
+maker_bps = 1.5
+liquidation_bps = 0.0
+fee_source = "doc: 公開手数料表の最下位 tier (taker 0.045% / maker 0.015%)。口座の tier で下がる"
+poll_interval_sec = 15
+book_depth = 100
+# l2Book は片側 20 本までしか返さない (リクエストで増やせない)。
+# BTC/ETH なら 20 本でも数百万ドル分あるので今のサイズでは問題にならないが、
+# 板の薄い銘柄を足すとこの会場だけ偽の「板不足」が出る。そのときは nSigFigs で
+# 価格をまとめて取るか、この会場だけサイズの上限を下げる必要がある。
+max_book_levels = 20
+region_restricted = ["US"]
+points_program = "シーズン制のポイント。自己売買由来の扱いは要確認"
+symbols = { BTC = "BTC", ETH = "ETH" }
+source = "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint"
+
+[[venues]]
+name = "lighter"
+adapter = "lighter"
+base_url = "https://mainnet.zklighter.elliot.ai"
+# /api/v1/funding-rates の rate は 8 時間ぶんの分数に正規化されている。
+# 根拠: 同時刻の /api/v1/fundings (resolution=1h) の rate は「1 時間あたりの％」で、
+#       funding-rates の rate / 8 と一致する (例: 9.6e-05 / 8 = 1.2e-05 = 0.0012%)。
+#       さらに /fundings の value / mark_price も同じ値になる。docs/funding.md に検算を残した。
+funding_interval_hours = 8
+taker_bps = 0.0
+maker_bps = 0.0
+liquidation_bps = 100.0
+fee_source = "api: /api/v1/orderBookDetails の taker_fee / maker_fee が 0.0000、liquidation_fee 1.0000。ただしこれは Standard 口座の条件。bot で使う口座が Premium だと taker 手数料がかかるはずなので、資金を入れる前に口座種別で要再確認"
+poll_interval_sec = 15
+book_depth = 200   # orderBookOrders の limit 上限は 200
+region_restricted = ["US"]
+points_program = "自己売買由来のポイントを遡及没収した実例あり。ポイント目的の往復売買は想定しない"
+symbols = { BTC = "BTC", ETH = "ETH" }
+source = "https://mainnet.zklighter.elliot.ai/api/v1/orderBookDetails"
+
+[[venues]]
+name = "paradex"
+adapter = "paradex"
+base_url = "https://api.prod.paradex.trade"
+# markets/summary が funding_interval_minutes を返すので、設定値と突き合わせる
+funding_interval_hours = 8
+api_interval_field = "funding_interval_minutes"
+# Paradex のファンディングは連続課金で、8h は表示上の決めごと。
+# 履歴は /v1/funding/data の累積 funding_index の差で取るので、
+# この時間ごとにインデックスをサンプルする (レートを足し合わせるより正確)。
+history_sample_hours = 8
+taker_bps = 2.0
+maker_bps = 0.0
+liquidation_bps = 0.0
+fee_source = "api: /v1/markets の fee_config.api_fee (taker 0.0002 / maker 0)。画面操作の interactive_fee は 0 だが bot は API 経由なので api_fee を使う"
+poll_interval_sec = 15
+book_depth = 100
+region_restricted = ["US"]
+points_program = "要確認"
+symbols = { BTC = "BTC-USD-PERP", ETH = "ETH-USD-PERP" }
+source = "https://api.prod.paradex.trade/v1/markets"
+
+[[venues]]
+name = "dydx"
+adapter = "dydx"
+base_url = "https://indexer.dydx.trade"
+# perpetualMarkets の nextFundingRate は 1 時間ぶん
+funding_interval_hours = 1
+taker_bps = 5.0
+maker_bps = 1.1
+liquidation_bps = 0.0
+fee_source = "doc: v4 の最下位 tier (taker 0.05% / maker 0.011%)"
+poll_interval_sec = 15
+book_depth = 100
+region_restricted = ["US"]
+points_program = "なし (TGE 済み)"
+symbols = { BTC = "BTC-USD", ETH = "ETH-USD" }
+source = "https://docs.dydx.xyz/api_integration-indexer/indexer_api"
+
+# ---------------------------------------------------------------- 参照のみ (売買しない)
+# オーナーの確定条件により海外 CEX は使わない。ファンディングの水準を読むだけに使う。
+# reference_only = true の会場は板を取らず、会場ペアのランキングにも入れない。
+
+[[venues]]
+name = "binance"
+adapter = "binance"
+base_url = "https://fapi.binance.com"
+# premiumIndex の lastFundingRate は 8 時間ぶん
+funding_interval_hours = 8
+reference_only = true
+taker_bps = 4.5
+maker_bps = 2.0
+liquidation_bps = 0.0
+fee_source = "doc (参照のみなので計算には使わない)"
+poll_interval_sec = 60
+region_restricted = ["US", "JP"]
+points_program = "なし"
+symbols = { BTC = "BTCUSDT", ETH = "ETHUSDT" }
+source = "https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data"

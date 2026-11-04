@@ -1,0 +1,28 @@
+{
+ "markets": {
+  "ETH-USD": {
+   "atomicResolution": -9,
+   "baseOpenInterest": "13993.985",
+   "clobPairId": "1",
+   "defaultFundingRate1H": "0",
+   "initialMarginFraction": "0.02",
+   "maintenanceMarginFraction": "0.012",
+   "marketType": "CROSS",
+   "nextFundingRate": "0.00000875",
+   "openInterest": "3825.095",
+   "openInterestLowerCap": "0",
+   "openInterestUpperCap": "0",
+   "oraclePrice": "2254.476277",
+   "priceChange24H": "-43.016486",
+   "quantumConversionExponent": -9,
+   "status": "ACTIVE",
+   "stepBaseQuantums": 1000000,
+   "stepSize": "0.001",
+   "subticksPerTick": 100000,
+   "tickSize": "0.1",
+   "ticker": "ETH-USD",
+   "trades24H": 3497,
+   "volume24H": "12467739.8827"
+  }
+ }
+}

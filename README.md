@@ -262,6 +262,19 @@ python -m tbf.arb report    # 集計
 
 設定は `arb.toml`、サーバー設置は `deploy/setup-server.sh`。詳細とセキュリティのチェックリストは [docs/arb.md](docs/arb.md)。
 
+## DEX 間ファンディング差 (常時起動サーバー, シャドーモード)
+
+perp DEX のファンディングレートを**年率に正規化**して会場間で比べ、手数料とスリッページを引いても
+黒字になる差があるかを測ります。こちらも売買しません (秘密鍵・API キー不要)。
+
+```bash
+python -m tbf.funding check            # 会場につながるか・建てが設定と合っているか
+python -m tbf.funding run              # 監視
+python -m tbf.funding report --days 7  # 会場ペアのランキング
+```
+
+設定は `funding.toml` と会場レジストリ `data/venues.toml` の 2 つ。詳細は [docs/funding.md](docs/funding.md)。
+
 ## 開発
 
 ```bash

@@ -1,0 +1,31 @@
+{
+ "results": [
+  {
+   "ask": "76562.3",
+   "ask_size": "0.0012",
+   "bid": "76549.6",
+   "bid_size": "0.02429",
+   "created_at": 1793696591706,
+   "delta": "1.00022",
+   "external_fair_price": "76511.37754637",
+   "funding_interval_minutes": 480,
+   "funding_rate": "0.000099884467",
+   "greeks": {
+    "delta": "1.00022",
+    "gamma": "0",
+    "vega": "0"
+   },
+   "last_traded_price": "76561.8",
+   "mark_price": "76555.45506607",
+   "open_interest": "61.84102",
+   "open_interest_long": "30.92051",
+   "open_interest_short": "30.92051",
+   "price_change_rate_24h": "-0.0211",
+   "risk_free_rate": "0",
+   "symbol": "BTC-USD-PERP",
+   "total_volume": "133936934689.626184",
+   "underlying_price": "76538.33575065",
+   "volume_24h": "2764460.923624002"
+  }
+ ]
+}
