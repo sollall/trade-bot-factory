@@ -1,0 +1,66 @@
+# A① Hyperliquid HYPE 現物ロング × HYPE perp ショート のシャドーモード計測 (TRA-22)
+#
+# 売買しない。注文系 API を呼ばない。秘密鍵も API キーも使わない。公開 info API の読み取りだけ。
+#
+# ここの数値は依頼票 (TRA-22) の事前宣言グリッドである。計測の途中で動かさない。
+# 「良い数字が出る設定」を後から選ばないための歯止めなので、変更するならタスク側で宣言し直すこと。
+
+info_url = "https://api.hyperliquid.xyz/info"
+
+# ---- 対象 (ティッカー一致で別資産を指す例が実在するので、token index まで宣言して check で突き合わせる)
+# HL 現物 @20「PUMP」は perp の PUMP と 4,655 倍乖離していた。@107 が HYPE/USDC であることを
+# spotMeta の tokens[150].fullName = "Hyperliquid" で毎回確認する。
+spot_pair = "@107"
+spot_base_token_index = 150
+spot_base_token_name = "HYPE"
+spot_base_token_full_name = "Hyperliquid"
+spot_quote_token_index = 0
+spot_quote_token_name = "USDC"
+perp_coin = "HYPE"
+
+# ---- 資本規約 (★ 確定事項。変更しない)
+# C = N + N/3 = 1.3333N。年率・シャープ・最大DD の分母は常に C。
+spot_notional_usd = 7_500   # N : 現物ロング
+perp_margin_usd = 2_500     # N/3 : perp 証拠金
+capital_usd = 10_000        # C
+# 「HL 現物残高が perp 証拠金に算入されるか」は未確定 (TRA-14 §8)。保守側 = 算入されない前提。
+spot_counts_as_perp_margin = false
+
+# ---- 手数料 (check が userFees の feeSchedule と突き合わせ、食い違えば失敗する)
+perp_taker_bps = 4.5   # feeSchedule.cross     = 0.00045
+spot_taker_bps = 7.0   # feeSchedule.spotCross = 0.0007
+fee_source = "api: POST /info {\"type\":\"userFees\"} の feeSchedule (最下位 tier)。口座の tier で下がる"
+
+# ---- 証拠金の閾値
+# marginTableId 52 = tiered 10x -> 当初証拠金 10%、維持証拠金はその半分の 5%
+maintenance_margin_frac = 0.05
+margin_warn_frac = 0.20
+perp_margin_table_id = 52
+
+# ---- 板の深さを測るサイズ (片脚 USD)。$10,000 が 1% 以内で入らない時間帯の有無が (iv) の論点
+depth_sizes_usd = [1_000, 5_000, 7_500, 10_000]
+# (iv) で「入らなかった」と判定するスリッページの閾値
+depth_fill_limit_pct = 1.0
+# l2Book は上位 20 段しか返さない。設定ではなく API の制約なので、超えた要求は「未測定」になる
+book_depth = 20
+
+# ---- 計測
+poll_interval_sec = 300     # 5 分間隔 (依頼票)
+measure_days = 30
+# fundingHistory を取り直す間隔。1 時間値なので毎ポーリング取る必要はない
+funding_refresh_sec = 900
+# 直近の取得からこれ以上古いスナップショットでは評価しない
+max_stale_sec = 1_800
+
+# ---- 合否基準 (★ 機械的に当てはめるだけ。採否判断はしない)
+# 合格: net年率 >= hurdle_net_apr かつ シャープ >= sharpe_pass
+# 却下: net年率 < hurdle_net_apr / シャープ < sharpe_reject / 清算が 1 回でも発生
+hurdle_net_apr = 0.0486     # A② sUSDe = ハードルレート
+sharpe_pass = 2.0
+sharpe_reject = 1.0
+
+# ---- 事前予想 (依頼票の記載。結果がこれに反したらそのまま報告する)
+expected_net_apr = 0.077
+expected_sharpe = 2.18
+expected_funding_apr = 0.1062   # 180日実測の平均
+expected_basis_sigma_bps = 4.14 # 1時間変化の σ (90日2,161本)

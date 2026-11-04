@@ -275,6 +275,20 @@ python -m tbf.funding report --days 7  # 会場ペアのランキング
 
 設定は `funding.toml` と会場レジストリ `data/venues.toml` の 2 つ。詳細は [docs/funding.md](docs/funding.md)。
 
+## HYPE 現物ロング × perp ショート (A①, 30日シャドーモード計測)
+
+Hyperliquid の現物 `@107` (HYPE/USDC) をロング、HYPE perp をショートして、資金調達料の固定金利成分を
+受け取り続けた場合の**実現**成績を 30 日測ります。こちらも売買しません (秘密鍵・API キー不要)。
+
+```bash
+python -m tbf.carry check              # @107 と HYPE perp に接続でき、板と履歴が取れるか
+python -m tbf.carry run                # 常駐して記録 (5分間隔)
+python -m tbf.carry report --days 30   # 実現net年率・シャープ・最大DD・証拠金の推移
+```
+
+必要資本は **C = N + N/3** に固定し (現物 N + perp 証拠金 N/3)、年率・シャープ・最大DD の分母は
+常に C。設定は `carry.toml`、詳細と既知の罠は [docs/carry-a1.md](docs/carry-a1.md)。
+
 ## 開発
 
 ```bash
