@@ -428,10 +428,14 @@ async def steth_depeg(rpc: Rpc) -> ItemResult:
         return ItemResult("2-2-steth-depeg", False, error=f"{type(e).__name__}: {e}", endpoint=f"eth_call {STETH_ETH_POOL}")
 
 
+async def hl_perp_universe_names(http: Http) -> set[str]:
+    meta = await _post(http, {"type": "meta"})
+    return {a["name"] for a in meta["universe"]}
+
+
 async def hl_universe_snapshot(http: Http) -> ItemResult:
     try:
-        meta = await _post(http, {"type": "meta"})
-        names = [a["name"] for a in meta["universe"]]
+        names = await hl_perp_universe_names(http)
         return ItemResult(
             "2-3-hl-universe",
             True,
@@ -442,6 +446,77 @@ async def hl_universe_snapshot(http: Http) -> ItemResult:
         )
     except Exception as e:  # noqa: BLE001
         return ItemResult("2-3-hl-universe", False, error=f"{type(e).__name__}: {e}", endpoint=INFO_URL)
+
+
+async def hl_spot_hedge_check(http: Http, coin: str) -> ItemResult:
+    """新規perp上場 coin について、HL現物に「同名」のトークンがあるかをコントラクトアドレスで同定する。
+
+    ティッカー一致は証拠にしない: spotMeta の tokens[].evmContract (非null) をコントラクト同定の根拠とし、
+    さらに同名の spot pair の midPx と perp の midPx を比較して価格が追随しているかを測る (判定はしない、数値を返すだけ)。
+    coin名/ctx の対応は **常に name フィールドで突き合わせる** (position/index による zip は使わない。
+    spotMetaAndAssetCtxs は universe と assetCtxs の長さが一致しないため、位置比較は静かにズレる)。
+    """
+    item_id = f"2-3-new-hedge-{coin}"
+    try:
+        spot_meta, spot_ctxs = await _post(http, {"type": "spotMetaAndAssetCtxs"})
+        spot_ctx_by_name = {c["coin"]: c for c in spot_ctxs}
+
+        token = next((t for t in spot_meta["tokens"] if t["name"] == coin), None)
+        if token is None:
+            return ItemResult(
+                item_id, True, value=0.0, unit="spot_hedge_exists",
+                note=f"spotMeta.tokens に name=={coin} のトークンが存在しない（現物ヘッジ候補なし）",
+                endpoint=f"{INFO_URL} type=spotMetaAndAssetCtxs",
+            )
+
+        evm_contract = (token.get("evmContract") or {}).get("address") if token.get("evmContract") else None
+        token_index = token["index"]
+        pair = next((u for u in spot_meta["universe"] if token_index in u["tokens"]), None)
+        spot_mid = None
+        if pair is not None:
+            ctx = spot_ctx_by_name.get(pair["name"])
+            if ctx is not None and ctx.get("midPx") is not None:
+                spot_mid = float(ctx["midPx"])
+
+        perp_meta, perp_ctxs = await _post(http, {"type": "metaAndAssetCtxs"})
+        perp_ctx_by_name = {a["name"]: c for a, c in zip(perp_meta["universe"], perp_ctxs)}
+        perp_ctx = perp_ctx_by_name.get(coin)
+        perp_mid = float(perp_ctx["midPx"]) if perp_ctx and perp_ctx.get("midPx") is not None else None
+
+        ratio = (spot_mid / perp_mid) if (spot_mid is not None and perp_mid is not None and perp_mid != 0) else None
+        note = (
+            f"evmContract={evm_contract} spot_pair={pair['name'] if pair else None} "
+            f"spot_midPx={spot_mid} perp_midPx={perp_mid} spot/perp_ratio={ratio}"
+        )
+        return ItemResult(
+            item_id,
+            True,
+            value=1.0 if evm_contract else 0.0,
+            unit="spot_hedge_contract_identified",
+            note=note,
+            endpoint=f"{INFO_URL} type=spotMetaAndAssetCtxs,metaAndAssetCtxs",
+        )
+    except Exception as e:  # noqa: BLE001
+        return ItemResult(item_id, False, error=f"{type(e).__name__}: {e}", endpoint=f"{INFO_URL} type=spotMetaAndAssetCtxs")
+
+
+async def hl_first_funding_rate(http: Http, coin: str, now_ms: int) -> ItemResult:
+    item_id = f"2-3-new-funding-{coin}"
+    try:
+        pts = await fetch_funding(http, coin, now_ms - 30 * DAY_MS, now_ms)
+        if not pts:
+            return ItemResult(item_id, False, error="fundingHistory が空（上場直後でまだ履歴なし）", endpoint=INFO_URL)
+        first = min(pts, key=lambda p: p.time)
+        return ItemResult(
+            item_id,
+            True,
+            value=first.rate,
+            unit="first_funding_rate_1h",
+            note=f"time={first.time} n_points={len(pts)}",
+            endpoint=f"{INFO_URL} fundingHistory coin={coin}",
+        )
+    except Exception as e:  # noqa: BLE001
+        return ItemResult(item_id, False, error=f"{type(e).__name__}: {e}", endpoint=INFO_URL)
 
 
 async def derive_api_status(http: Http) -> ItemResult:
