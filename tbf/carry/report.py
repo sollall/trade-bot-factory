@@ -60,12 +60,17 @@ class Daily:
     ret: float
     margin_ratio_min: float
     liquidated: bool
+    span_days: float
 
 
 def daily_rows(store: CarryStore, cfg: CarryConfig) -> list[Daily]:
     """UTC 日ごとの終値サンプルから日次 net の系列を作る
 
     日次リターンの分母は常に C。日 0 の値には建玉コストが一括で入っている。
+
+    `span_days` は「その行が実際に覆っている時間」(前の行の終値から今の行の終値まで。
+    最初の行は建玉時刻から)。UTC 日で切るので初日と最終日は部分日になり、
+    行数をそのまま日数として年率化すると経過日数を過大に数える。年率化はこの値を使う。
     """
     rows = store.query(
         """SELECT date(time/1000, 'unixepoch') AS d, COUNT(*) AS n,
@@ -79,13 +84,18 @@ def daily_rows(store: CarryStore, cfg: CarryConfig) -> list[Daily]:
                  (SELECT MAX(time) FROM samples GROUP BY date(time/1000, 'unixepoch'))"""
         )
     }
+    entry = store.load_entry()
     out: list[Daily] = []
     prev_net = 0.0
     prev_funding = 0.0
+    prev_t = entry.time if entry is not None else None
     for r in rows:
         s = closes[int(r["t"])]
         net = float(s["net_pnl_usd"])
         fund = float(s["funding_cum_usd"])
+        t = int(r["t"])
+        span = 1.0 if prev_t is None else (t - prev_t) / DAY_MS
+        prev_t = t
         out.append(
             Daily(
                 date=r["d"],
@@ -100,6 +110,7 @@ def daily_rows(store: CarryStore, cfg: CarryConfig) -> list[Daily]:
                 ret=(net - prev_net) / cfg.capital_usd,
                 margin_ratio_min=float(r["mr_min"]),
                 liquidated=bool(r["liq"]),
+                span_days=span,
             )
         )
         prev_net, prev_funding = net, fund
@@ -114,13 +125,14 @@ def write_daily_csv(rows: Sequence[Daily], path: str | Path) -> Path:
         w.writerow([
             "date", "samples", "spot_mark", "perp_mark", "basis_bps",
             "funding_usd_day", "funding_cum_usd", "mtm_usd", "net_pnl_usd",
-            "daily_return_on_C", "margin_ratio_min", "liquidated",
+            "daily_return_on_C", "margin_ratio_min", "liquidated", "span_days",
         ])
         for d in rows:
             w.writerow([
                 d.date, d.samples, f"{d.spot_mark:.6f}", f"{d.perp_mark:.6f}", f"{d.basis_bps:.4f}",
                 f"{d.funding_usd:.6f}", f"{d.funding_cum_usd:.6f}", f"{d.mtm_usd:.6f}",
                 f"{d.net_pnl_usd:.6f}", f"{d.ret:.10f}", f"{d.margin_ratio_min:.6f}", int(d.liquidated),
+                f"{d.span_days:.6f}",
             ])
     return p
 
@@ -217,6 +229,67 @@ def depth_by_hour(store: CarryStore, cfg: CarryConfig, size_usd: float) -> list[
     return lines
 
 
+# ---------------------------------------------------------------- ベーシスの σ
+
+
+def _sigma_phases(values: Sequence[float], step: int) -> list[float]:
+    """`step` 本おきに間引いた系列の変化 σ を、間引きの位相すべてについて返す
+
+    5 分サンプルから 1 時間刻みを作る位相は 12 通りある。標本が短いと位相で σ が倍近く動くので、
+    1 つの位相だけを「実測値」として出さないためにここで全位相を出す。
+    """
+    out = []
+    for off in range(step):
+        s = values[off::step]
+        ch = [b - a for a, b in zip(s, s[1:])]
+        if len(ch) >= 2:
+            out.append(statistics.stdev(ch))
+    return out
+
+
+def _autocorr1(changes: Sequence[float]) -> Optional[float]:
+    if len(changes) < 3:
+        return None
+    m = sum(changes) / len(changes)
+    den = sum((x - m) ** 2 for x in changes)
+    if den == 0:
+        return None
+    num = sum((changes[i] - m) * (changes[i + 1] - m) for i in range(len(changes) - 1))
+    return num / den
+
+
+def _sigma_scaling_table(values: Sequence[float]) -> list[str]:
+    """刻みごとの σ と、5 分 σ を √k で伸ばした値の比
+
+    事前予想のシャープ 2.18 は 1 時間 σ を時間方向に伸ばして作られている。
+    実測の σ が √t で伸びるかどうかはその前提の成否に直接効くので、比をそのまま出す。
+    """
+    steps = ((1, "5分"), (3, "15分"), (6, "30分"), (12, "1時間"), (24, "2時間"),
+             (48, "4時間"), (72, "6時間"), (144, "12時間"), (288, "1日"))
+    lines = [
+        "",
+        "ベーシス変化の σ — 刻み別（σ が √t で伸びるかどうかが事前予想シャープの前提）:",
+        "",
+        "| 刻み | 変化のサンプル n | σ(bps) 中位(全位相) | σ の SE | 5分σ×√k (ランダムウォーク前提) | 実測/RW |",
+        "|---|---|---|---|---|---|",
+    ]
+    base: Optional[float] = None
+    for k, label in steps:
+        phases = _sigma_phases(values, k)
+        n = len(values) // k - 1
+        if not phases:
+            lines.append(f"| {label} | {max(n, 0)} | 未測定(n<2) | — | — | — |")
+            continue
+        s = statistics.median(phases)
+        if base is None:
+            base = s
+        rw = base * (k ** 0.5)
+        se = s / (2 * max(n - 1, 1)) ** 0.5
+        ratio = "—" if rw == 0 else f"{s / rw:.2f}"
+        lines.append(f"| {label} | {n} | {s:.2f} | ±{se:.2f} | {rw:.2f} | {ratio} |")
+    return lines
+
+
 # ---------------------------------------------------------------- 窓別 (週)
 
 
@@ -234,21 +307,23 @@ def window_rows(dailies: Sequence[Daily], cfg: CarryConfig, window_days: int = 7
     rows = []
     for i, c in enumerate(chunks, 1):
         pnl = sum(d.ret for d in c) * cfg.capital_usd
-        apr = annualized(pnl, cfg.capital_usd, len(c))
+        # 行数ではなく実際に覆っている時間で年率化する (UTC 日で切るため初日・最終日は部分日)
+        span = sum(d.span_days for d in c)
+        apr = annualized(pnl, cfg.capital_usd, span)
         st = stats([d.ret for d in c])
         aprs.append(apr)
-        rows.append((i, c[0].date, c[-1].date, len(c), pnl, apr, st))
+        rows.append((i, c[0].date, c[-1].date, len(c), span, pnl, apr, st))
     best = max((a for a in aprs if a is not None), default=None)
     lines = [
-        "| 窓 | 開始(UTC日) | 終了 | 日数 | net損益 | net年率(OOS) | シャープ | σ(日次) | 効率(最良窓比) |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| 窓 | 開始(UTC日) | 終了 | 行数 | 実日数 | net損益 | net年率(OOS) | シャープ | σ(日次) | 効率(最良窓比) |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
-    for (i, d0, d1, n, pnl, apr, st) in rows:
+    for (i, d0, d1, n, span, pnl, apr, st) in rows:
         eff = "—" if (best is None or apr is None or best == 0) else f"{apr / best:.2f}"
         sh = "未測定(n<2)" if st is None else f"{st.sharpe:+.2f}"
         sd = "未測定(n<2)" if st is None else f"{st.std * 100:.4f}%"
         lines.append(
-            f"| {i} | {d0} | {d1} | {n} | ${pnl:+,.2f} | {_pct(apr)} | {sh} | {sd} | {eff} |"
+            f"| {i} | {d0} | {d1} | {n} | {span:.2f} | ${pnl:+,.2f} | {_pct(apr)} | {sh} | {sd} | {eff} |"
         )
     return lines
 
@@ -392,21 +467,39 @@ def build_report(store: CarryStore, cfg: CarryConfig, now: int, days: Optional[f
             )
         else:
             L.append("- 5 分変化の σ: **未測定** (サンプルが 3 本未満)")
-        # 事前予想 (4.14bps) は 1 時間変化の σ なので、1 時間間隔の実測で直接比べる
-        hourly = [float(r["basis_bps"]) for r in store.query(
-            """SELECT basis_bps FROM samples WHERE time IN
-                 (SELECT MIN(time) FROM samples GROUP BY time / ?) ORDER BY time""", (HOUR_MS,)
-        )]
-        hourly_changes = [b - a for a, b in zip(hourly, hourly[1:])]
-        if len(hourly_changes) >= 2:
+        # 事前予想 (4.14bps) は 1 時間変化の σ なので、1 時間間隔の実測で直接比べる。
+        # ただし 5 分サンプルから 1 時間刻みを作る位相は 12 通りあり、標本が短いと位相で値が大きく動く。
+        # 1 つの位相だけを出すと恣意的な数字になるので、12 位相すべてを出して中位と範囲で比べる。
+        phases = _sigma_phases(basis_vals, 12)
+        if phases:
+            med = statistics.median(phases)
             L.append(
-                f"- **1 時間変化の σ (直接計測): {statistics.stdev(hourly_changes):.2f}bps "
-                f"(n={len(hourly_changes)}) / 事前予想 {cfg.expected_basis_sigma_bps:.2f}bps**"
+                f"- **1 時間変化の σ (直接計測, 5 分グリッドの 12 位相すべて): 中位 {med:.2f}bps "
+                f"(範囲 {min(phases):.2f}〜{max(phases):.2f}bps, 位相 {len(phases)} 通り × 各 "
+                f"n={len(basis_vals) // 12 - 1}) / 事前予想 {cfg.expected_basis_sigma_bps:.2f}bps**"
             )
+            if min(phases) <= cfg.expected_basis_sigma_bps <= max(phases):
+                L.append(
+                    f"  - 事前予想 {cfg.expected_basis_sigma_bps:.2f}bps は位相による振れ幅の内側にある"
+                    "（この標本数では一致・不一致を言えない）"
+                )
         else:
             L.append(
-                f"- 1 時間変化の σ (直接計測): **未測定** (1 時間間隔のサンプルが "
-                f"{len(hourly)} 本しかない) / 事前予想 {cfg.expected_basis_sigma_bps:.2f}bps"
+                "- 1 時間変化の σ (直接計測): **未測定** (1 時間刻みを作るには 5 分サンプルが "
+                f"26 本以上必要。現在 {len(basis_vals)} 本) / 事前予想 "
+                f"{cfg.expected_basis_sigma_bps:.2f}bps"
+            )
+        L.extend(_sigma_scaling_table(basis_vals))
+        ac = _autocorr1(changes)
+        if ac is not None:
+            L.append(
+                f"- 5 分変化の lag-1 自己相関: {ac:+.3f} (n={len(changes)}, ±1SE≈"
+                f"{1 / len(changes) ** 0.5:.3f})"
+                + (
+                    " — 負なので平均回帰しており、σ を √t で伸ばすと長い刻みの揺れを過大に見積もる"
+                    if ac < -2 / len(changes) ** 0.5
+                    else ""
+                )
             )
         L.append(
             f"- 証拠金率 (perp 口座のみ): 現在 "
@@ -496,12 +589,12 @@ def build_report(store: CarryStore, cfg: CarryConfig, now: int, days: Optional[f
     L.append("")
     L.extend(window_rows(dailies, cfg))
     L.append("")
-    L.append("| UTC日 | サンプル | 現物mark | perp mark | ベーシスbps | 当日ファンディング | 累計ファンディング | "
+    L.append("| UTC日 | サンプル | 覆う日数 | 現物mark | perp mark | ベーシスbps | 当日ファンディング | 累計ファンディング | "
              "ベーシス評価損益 | net損益 | 日次リターン(C) | 証拠金率 最悪 |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for d in dailies:
         L.append(
-            f"| {d.date} | {d.samples} | {d.spot_mark:,.4f} | {d.perp_mark:,.4f} | {d.basis_bps:+.2f} | "
+            f"| {d.date} | {d.samples} | {d.span_days:.2f} | {d.spot_mark:,.4f} | {d.perp_mark:,.4f} | {d.basis_bps:+.2f} | "
             f"${d.funding_usd:+,.4f} | ${d.funding_cum_usd:+,.4f} | ${d.mtm_usd:+,.2f} | "
             f"${d.net_pnl_usd:+,.2f} | {d.ret * 100:+.4f}% | {d.margin_ratio_min * 100:.2f}% |"
         )

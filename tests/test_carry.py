@@ -26,7 +26,13 @@ from tbf.carry.position import (
     walk,
 )
 from tbf.carry.recorder import Recorder, Snapshot, build_entry, floor_to, verify_identity
-from tbf.carry.report import build_report, cost_series, daily_rows, write_daily_csv
+from tbf.carry.report import (
+    build_report,
+    cost_series,
+    daily_rows,
+    window_rows,
+    write_daily_csv,
+)
 from tbf.carry.store import CarryStore
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -521,3 +527,58 @@ async def test_daily_returns_divide_by_capital(tmp_path):
     last = rows[-1]
     assert last.ret == pytest.approx(10.0 / cfg.capital_usd)
     assert last.funding_usd == pytest.approx(10.0)
+
+
+async def test_window_apr_uses_elapsed_time_not_row_count(tmp_path):
+    """UTC 日で切ると初日・最終日が部分日になる。行数を日数として年率化してはいけない
+
+    建玉 12:00 から 24 時間ぶん記録すると UTC 日の行は 2 行できるが、実際の経過は 1 日。
+    行数で割ると年率が半分になる (この run で実際に出ていたズレの回帰)。
+    """
+    # 建玉を 12:00 UTC に置く (1_700_000_000_000 は 2023-11-14 22:13:20 UTC なので明示的に作る)
+    noon = 1_700_000_000_000 - (1_700_000_000_000 % 86_400_000) + 43_200_000
+    cfg, store, rec = await run_recorder(tmp_path, polls=2, clock_start=noon - 300_000)
+    e = store.load_entry()
+    # 当日 23:00 と翌日 12:00 の 2 本。net は現物/perp 同値でファンディングだけが積む
+    for t, fund in ((e.time + 11 * 3_600_000, 1.0), (e.time + 24 * 3_600_000, 2.0)):
+        store.add_sample(
+            mark(e, t, 100.0, 100.0, fund, cfg.maintenance_margin_frac, cfg.margin_warn_frac), {}
+        )
+    store.commit()
+    rows = daily_rows(store, cfg)
+    assert len(rows) == 2
+    assert sum(r.span_days for r in rows) == pytest.approx(1.0, abs=1e-6)
+
+    pnl = rows[-1].net_pnl_usd
+    by_elapsed = annualized(pnl, cfg.capital_usd, 1.0)
+    by_row_count = annualized(pnl, cfg.capital_usd, 2.0)
+    lines = window_rows(rows, cfg)
+    assert f"{by_elapsed * 100:+.2f}%" in lines[-1]
+    assert f"{by_row_count * 100:+.2f}%" not in lines[-1]
+    # 行数 (2) と実日数 (1.00) を両方出していること
+    assert "| 2 | 1.00 |" in lines[-1]
+
+
+def test_sigma_phases_exposes_how_much_the_hourly_grid_matters():
+    """5 分サンプルから 1 時間刻みを作る位相は 12 通り。1 つだけ出すと恣意的な σ になる"""
+    from tbf.carry.report import _sigma_phases
+
+    # 5 分おきに ±1 を交互に振る（完全な平均回帰）。位相で σ が変わる系列
+    v = [(-1.0) ** i for i in range(300)]
+    phases = _sigma_phases(v, 12)
+    assert len(phases) == 12
+    # 偶数刻みで間引くので全位相で変化 0 -> σ 0。位相を 1 つ選んでも値は同じ
+    assert max(phases) == pytest.approx(0.0)
+
+
+def test_mean_reverting_basis_breaks_root_t_scaling():
+    """σ を √t で伸ばす前提が崩れていれば、刻み別の表で 実測/RW < 1 として見える"""
+    from tbf.carry.report import _autocorr1, _sigma_scaling_table
+
+    v = [3.0 * (-1.0) ** i + 0.01 * i for i in range(300)]
+    ch = [b - a for a, b in zip(v, v[1:])]
+    assert _autocorr1(ch) < -0.5
+    table = _sigma_scaling_table(v)
+    hourly = next(line for line in table if line.startswith("| 1時間"))
+    ratio = float(hourly.rstrip(" |").rsplit("|", 1)[1])
+    assert ratio < 1.0
