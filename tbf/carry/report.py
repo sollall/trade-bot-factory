@@ -191,7 +191,12 @@ def cost_table(store: CarryStore, cfg: CarryConfig) -> list[str]:
 # ---------------------------------------------------------------- (iv) 時間帯別の深さ
 
 
-def depth_by_hour(store: CarryStore, cfg: CarryConfig, size_usd: float) -> list[str]:
+def depth_by_hour(
+    store: CarryStore, cfg: CarryConfig, size_usd: float, leg: str = "spot"
+) -> list[str]:
+    """`leg` の板上位 20 段の深さを UTC 時刻別に。依頼票の (iv) は現物だが、
+    実際に 20 段で届かなかったのが perp 側だったので両脚とも出す。
+    """
     limit_bps = cfg.depth_fill_limit_pct * 100
     lines = [
         f"| UTC時 | 回数 | 買い板(bid)20段 中位 | 売り板(ask)20段 中位 | ${size_usd:,.0f} 買いスリッページ 中位/最大 | "
@@ -201,9 +206,9 @@ def depth_by_hour(store: CarryStore, cfg: CarryConfig, size_usd: float) -> list[
     for h in range(24):
         rows = store.query(
             """SELECT side, slip_bps, depth_usd FROM fills
-               WHERE leg = 'spot' AND size_usd = ?
+               WHERE leg = ? AND size_usd = ?
                  AND CAST(strftime('%H', time/1000, 'unixepoch') AS INTEGER) = ?""",
-            (size_usd, h),
+            (leg, size_usd, h),
         )
         if not rows:
             continue
@@ -227,6 +232,29 @@ def depth_by_hour(store: CarryStore, cfg: CarryConfig, size_usd: float) -> list[
             f"{unfilled} | {over} |"
         )
     return lines
+
+
+def _unfilled_rows(store: CarryStore, cfg: CarryConfig) -> list[str]:
+    """20 段で届かなかった時刻を 1 行ずつ。時刻別の集計だけだと「いつ」が消えるので全件出す"""
+    rows = store.query(
+        """SELECT time, leg, side, size_usd, depth_usd, levels_seen FROM fills
+           WHERE slip_bps IS NULL ORDER BY size_usd, time"""
+    )
+    if not rows:
+        return ["", "20 段で届かなかった時刻は **0 件**。"]
+    out = [
+        "",
+        f"20 段で届かなかった時刻は **{len(rows)} 件**（全件）:",
+        "",
+        "| 時刻 (UTC) | 脚 | 向き | 要求サイズ | 20 段ぶんの深さ | 取得できた段数 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        out.append(
+            f"| {_ts(int(r['time']))} | {r['leg']} | {r['side']} | ${float(r['size_usd']):,.0f} | "
+            f"${float(r['depth_usd']):,.0f} | {int(r['levels_seen'])} |"
+        )
+    return out
 
 
 # ---------------------------------------------------------------- ベーシスの σ
@@ -535,14 +563,23 @@ def build_report(store: CarryStore, cfg: CarryConfig, now: int, days: Optional[f
     L.append("")
 
     # ---- (iv)
-    L.append("## (iv) 現物板上位 20 段の深さ — UTC 時刻別")
+    biggest = max(cfg.depth_sizes_usd)
+    L.append("## (iv) 板上位 20 段の深さ — UTC 時刻別")
     L.append("")
-    L.extend(depth_by_hour(store, cfg, max(cfg.depth_sizes_usd)))
+    L.append(f"### 現物 `{cfg.spot_pair}`")
+    L.append("")
+    L.extend(depth_by_hour(store, cfg, biggest, "spot"))
+    L.append("")
+    L.append(f"### perp `{cfg.perp_coin}`（依頼票の (iv) は現物だが、20 段で届かなかったのはこちらだった）")
+    L.append("")
+    L.extend(depth_by_hour(store, cfg, biggest, "perp"))
     L.append("")
     L.append(
         "`l2Book` は上位 20 段しか返さないので、ここでの深さは「取得できた 20 段の範囲で」の値。"
         "20 段で届かなかった回数は「歩けず」列に出している。"
+        "**20 段で届かないことは「板が薄い」と同じではない** (21 段目以降は取得できない)。"
     )
+    L.extend(_unfilled_rows(store, cfg))
     L.append("")
 
     # ---- 日次・シャープ

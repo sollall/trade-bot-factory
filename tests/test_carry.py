@@ -505,8 +505,11 @@ async def test_report_and_csv_cover_the_four_items(tmp_path):
     cfg, store, rec = await run_recorder(tmp_path, polls=3)
     out = build_report(store, cfg, rec.entry.time + 2 * 86_400_000)
     for header in ("(i) 実効往復コスト", "(ii) 実現ファンディング累計",
-                   "(iii) ベーシスの最大逸脱と証拠金", "(iv) 現物板上位 20 段の深さ"):
+                   "(iii) ベーシスの最大逸脱と証拠金", "(iv) 板上位 20 段の深さ"):
         assert header in out
+    # (iv) は現物と perp の両方を出す (20 段で届かなかったのは perp 側だった)
+    assert f"### 現物 `{cfg.spot_pair}`" in out
+    assert f"### perp `{cfg.perp_coin}`" in out
     assert "C = $10,000" in out
     rows = daily_rows(store, cfg)
     p = write_daily_csv(rows, tmp_path / "a1_daily.csv")
