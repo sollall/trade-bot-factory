@@ -582,3 +582,34 @@ def test_mean_reverting_basis_breaks_root_t_scaling():
     hourly = next(line for line in table if line.startswith("| 1時間"))
     ratio = float(hourly.rstrip(" |").rsplit("|", 1)[1])
     assert ratio < 1.0
+
+
+async def test_funding_is_not_refetched_for_hours_already_recorded(tmp_path):
+    """保存時刻は毎時丁度に丸めるが API の time は毎時 +数十ms。`last+1` から取ると毎回 1 件返る
+
+    二重計上は INSERT OR REPLACE で起きないが、「1 時間ぶん追加」とログに出続け、
+    同じ 1 時間ぶんを毎回取りに行って API 呼び出しを無駄に使う。
+    """
+    cfg = load_config(CONFIG)
+    store = CarryStore(tmp_path / "a1.sqlite")
+    http = FakeHttp()
+    t = {"now": 1_700_000_000_000}
+
+    def clock():
+        t["now"] += 3_600_000
+        return t["now"]
+
+    rec = Recorder(cfg, http, store, clock=clock, log=lambda m: None)
+    # ファンディングは 1 時間刻みなので 1 ポーリング 1 時間で回す
+    for _ in range(3):
+        await rec.poll_once()
+    client = InfoClient(http, cfg.info_url)
+    n_rows = store.query("SELECT COUNT(*) AS n FROM funding")[0]["n"]
+    assert n_rows >= 1
+    # 同じ時刻でもう一度回す -> 新しい時間は無いので 0 件、行数も増えない
+    assert await rec.update_funding(client, t["now"]) == 0
+    assert await rec.update_funding(client, t["now"]) == 0
+    assert store.query("SELECT COUNT(*) AS n FROM funding")[0]["n"] == n_rows
+    # 1 時間進めれば 1 件だけ増える
+    assert await rec.update_funding(client, t["now"] + 3_600_000) == 1
+    assert store.query("SELECT COUNT(*) AS n FROM funding")[0]["n"] == n_rows + 1

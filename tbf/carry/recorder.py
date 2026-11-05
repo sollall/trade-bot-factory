@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from tbf.carry.config import CarryConfig
-from tbf.carry.hl import Book, HlError, InfoClient, round_hour
+from tbf.carry.hl import HOUR_MS, Book, HlError, InfoClient, round_hour
 from tbf.carry.position import Entry, Fill, mark, walk
 from tbf.carry.store import CarryStore
 from tbf.http import Http
@@ -168,15 +168,22 @@ class Recorder:
     # ---- ファンディング (ii)
 
     async def update_funding(self, client: InfoClient, now: int) -> int:
-        """fundingHistory の 1 時間値を建玉後のぶんだけ積む。新しく積んだ件数を返す"""
+        """fundingHistory の 1 時間値を建玉後のぶんだけ積む。新しく積んだ件数を返す
+
+        保存する time は毎時丁度に丸めてあるが、API が返す実際の time は毎時 +数十ms
+        なので、`last + 1` から取り直すと直近 1 時間ぶんが毎回もう一度返ってくる。
+        丸めた後の時刻で既に持っている時間は取りに行かないよう、半時間ぶん先から要求する。
+        """
         assert self.entry is not None
         last = self.store.last_funding_time()
-        start = (last + 1) if last is not None else round_hour(self.entry.time)
+        start = (last + HOUR_MS // 2) if last is not None else round_hour(self.entry.time)
         points = await client.funding_history(self.cfg.perp_coin, start, now)
         added = 0
         for p in points:
             if p.time <= self.entry.time:
                 continue  # 建玉前の時間ぶんは受け取れない
+            if last is not None and p.time <= last:
+                continue  # 既に積んである時間 (二重計上はしないが、追加件数にも数えない)
             mark_px = self._perp_mark_at(p.time)
             amount = p.rate * self.entry.size * mark_px if mark_px else None
             self.store.add_funding(
