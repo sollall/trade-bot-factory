@@ -616,3 +616,58 @@ async def test_funding_is_not_refetched_for_hours_already_recorded(tmp_path):
     # 1 時間進めれば 1 件だけ増える
     assert await rec.update_funding(client, t["now"] + 3_600_000) == 1
     assert store.query("SELECT COUNT(*) AS n FROM funding")[0]["n"] == n_rows + 1
+
+
+def test_funding_is_not_floored_at_the_fixed_interest_component():
+    """依頼票の「固定金利成分 0.01%/8h が常時発生」は床ではない
+
+    復元した式では premium が帯の外に出るとレートが premium に引きずられ、
+    premium < -0.05%/8h では確定レートが負になる。実測で踏んだ値で固定する。
+    """
+    from tbf.carry.report import HL_INTEREST_8H, hl_funding_1h
+
+    floor = HL_INTEREST_8H / 8
+    # premium が帯の中 -> 固定金利成分ちょうど (依頼票の前提が成り立つ範囲)
+    assert hl_funding_1h(0.0) == pytest.approx(floor)
+    assert hl_funding_1h(-0.0003) == pytest.approx(floor)
+    assert hl_funding_1h(0.0005) == pytest.approx(floor)
+    # 帯の外 -> 床を割る。2026-11-08 09:00 UTC の実測値
+    assert hl_funding_1h(-0.0004417042) == pytest.approx(0.0000072870, abs=1e-10)
+    assert hl_funding_1h(-0.0004417042) < floor
+    # 2026-11-08 22:00 UTC の実測値 -> 負
+    assert hl_funding_1h(-0.0008703647) == pytest.approx(-0.0000462956, abs=1e-10)
+    assert hl_funding_1h(-0.0008703647) < 0
+    # 2026-11-05 21:00 UTC の実測値 -> 床より上
+    assert hl_funding_1h(0.0007199316) == pytest.approx(0.0000274915, abs=1e-10)
+
+
+async def test_basis_reports_mid_alongside_mark(tmp_path):
+    """markPx が板の mid から離れた瞬間を、板で取れたベーシスとして出さないこと"""
+    from tbf.carry.report import _mark_vs_mid_basis
+
+    cfg = load_config(CONFIG)
+    store = CarryStore(tmp_path / "a1.sqlite")
+    http = FakeHttp()
+    rec = Recorder(cfg, http, store, clock=lambda: 1_700_000_000_000, log=lambda m: None)
+    await rec.poll_once()
+    # markPx だけ 1% 下にずらした行を足す (oracle 遅れの再現)。mid は板のまま
+    row = store.query("SELECT * FROM samples ORDER BY time")[0]
+    cols = [k for k in row.keys()]
+    vals = [row[k] for k in cols]
+    vals[cols.index("time")] = int(row["time"]) + 300_000
+    vals[cols.index("perp_mark")] = float(row["perp_mark"]) * 0.99
+    vals[cols.index("basis_bps")] = (
+        (float(row["perp_mark"]) * 0.99 - float(row["spot_mark"])) / float(row["spot_mark"]) * 1e4
+    )
+    store.conn.execute(
+        f"INSERT INTO samples ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals
+    )
+    store.conn.commit()
+
+    lines = _mark_vs_mid_basis(store, cfg)
+    text = "\n".join(lines)
+    assert "mid で測り直したベーシス" in text
+    # markPx と mid の乖離を 1 件として申告していること
+    assert "1 / 2" in text
+    # mid ベースの最大逸脱は mark ベース (約 -100bps) より桁で小さい
+    assert "建玉時からの最大逸脱 0.0" in text or "建玉時からの最大逸脱 1." in text

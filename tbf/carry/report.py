@@ -275,6 +275,120 @@ def _sigma_phases(values: Sequence[float], step: int) -> list[float]:
     return out
 
 
+# HL の 1 時間ファンディング。8 時間ベースで
+#   funding_8h = premium + clamp(interest_8h - premium, -CLAMP_8H, +CLAMP_8H)
+# を計算し、8 で割って 1 時間値にしている。実測 4,320 時間で誤差 5e-11 以内で再現する。
+HL_INTEREST_8H = 0.0001  # 固定金利成分 0.01% / 8h
+HL_FUNDING_CLAMP_8H = 0.0005  # ±0.05% / 8h
+
+
+def hl_funding_1h(premium: float) -> float:
+    """premium から 1 時間ファンディングを復元する"""
+    adj = HL_INTEREST_8H - premium
+    adj = max(-HL_FUNDING_CLAMP_8H, min(HL_FUNDING_CLAMP_8H, adj))
+    return (premium + adj) / 8
+
+
+def _funding_floor_check(store, cfg) -> list[str]:
+    """「固定金利成分が床になる」という前提が成り立った時間を数える
+
+    依頼票は収益の源泉を「固定金利成分 0.01%/8h が常時発生。プレミアムが 0 でもショートは受け取る」
+    と書いている。復元した式では、確定レートが固定金利成分に等しくなるのは
+    premium が [interest - clamp, interest + clamp] の帯の中にいるときだけで、
+    帯の外ではレートが premium に引きずられる。成り立った時間と外れた時間を数えて出す。
+    """
+    rows = store.query("SELECT time, rate, premium FROM funding WHERE premium IS NOT NULL ORDER BY time")
+    if not rows:
+        return ["- 固定金利成分が床になったかの検証: **未測定** (`premium` を持つファンディング行がありません)"]
+    floor = HL_INTEREST_8H / 8
+    eps = 1e-9
+    rates = [float(r["rate"]) for r in rows]
+    below = [r for r in rows if float(r["rate"]) < floor - eps]
+    above = [r for r in rows if float(r["rate"]) > floor + eps]
+    worst_err = max(abs(hl_funding_1h(float(r["premium"])) - float(r["rate"])) for r in rows)
+    lo = HL_INTEREST_8H - HL_FUNDING_CLAMP_8H
+    hi = HL_INTEREST_8H + HL_FUNDING_CLAMP_8H
+    out = [
+        "",
+        f"**固定金利成分 {HL_INTEREST_8H * 100:g}%/8h (年率 {floor * 24 * 365 * 100:+.2f}%) が"
+        "床になるかの検証** — 依頼票は「固定金利成分が常時発生する」と書いているので、実測で数える:",
+        "",
+        f"- 確定レート = 固定金利成分ちょうど: {len(rows) - len(below) - len(above)} / {len(rows)} 時間",
+        f"- **固定金利成分を下回った: {len(below)} / {len(rows)} 時間 = "
+        f"{len(below) / len(rows) * 100:.1f}%**",
+        f"- 固定金利成分を上回った: {len(above)} / {len(rows)} 時間 = {len(above) / len(rows) * 100:.1f}%",
+        f"- `premium` の範囲: {min(float(r['premium']) for r in rows):+.6f} 〜 "
+        f"{max(float(r['premium']) for r in rows):+.6f}",
+        f"- 復元した式 `(premium + clamp({HL_INTEREST_8H:g} - premium, ±{HL_FUNDING_CLAMP_8H:g})) / 8` は "
+        f"{len(rows)} 時間すべてを誤差 {worst_err:.1e} 以内で再現する "
+        f"(= 確定レートは `premium` から一意に決まる)",
+        f"- 式の含意: 確定レートが固定金利成分に等しくなるのは `premium` が "
+        f"[{lo:+.4f}, {hi:+.4f}] の帯にいるときだけ。帯の外ではレートが `premium` に引きずられ、"
+        f"`premium` < {-HL_FUNDING_CLAMP_8H:+.4f} では**負になる**",
+    ]
+    if below:
+        out.append(
+            f"- 下回った時間の最小: 年率 {min(rates) * 24 * 365 * 100:+.2f}% "
+            f"({_ts(int(min(below, key=lambda r: float(r['rate']))['time']))})"
+        )
+    return out
+
+
+def _mark_vs_mid_basis(store, cfg) -> list[str]:
+    """markPx で測ったベーシスを、板の mid で測ったベーシスと突き合わせる
+
+    依頼票の (iii) は「perp マーク価格と現物の乖離」なので markPx で測るのが指定どおりだが、
+    HL の markPx は oracle を含む合成値で、速い値動きのあいだ板の mid から離れる。
+    markPx だけ出すと「板で解消できたはずのベーシス」と読めてしまうので、両方並べる。
+    どちらが正しいという話ではなく、markPx は証拠金・清算の判定に効き、mid は解消時の実現値に効く。
+    """
+    rows = store.query(
+        "SELECT time, spot_mark, spot_mid, perp_mark, perp_mid, perp_oracle, basis_bps "
+        "FROM samples WHERE spot_mid IS NOT NULL AND perp_mid IS NOT NULL ORDER BY time"
+    )
+    if len(rows) < 2:
+        return ["- mid ベースのベーシス: **未測定** (mid を持つサンプルが 2 本未満)"]
+    mid_vals = [(float(r["perp_mid"]) - float(r["spot_mid"])) / float(r["spot_mid"]) * 1e4 for r in rows]
+    mark_vals = [float(r["basis_bps"]) for r in rows]
+    gaps = [abs(a - b) for a, b in zip(mark_vals, mid_vals)]
+    out = [
+        f"- 同じサンプルを板の mid で測り直したベーシス (perp mid − 現物 mid) / 現物: "
+        f"平均 {statistics.fmean(mid_vals):+.2f}bps, 最小 {min(mid_vals):+.2f}bps, "
+        f"最大 {max(mid_vals):+.2f}bps / 建玉時からの最大逸脱 "
+        f"{max(abs(v - mid_vals[0]) for v in mid_vals):.2f}bps",
+    ]
+    if len(rows) >= 3:
+        mark_sd = statistics.stdev([b - a for a, b in zip(mark_vals, mark_vals[1:])])
+        mid_sd = statistics.stdev([b - a for a, b in zip(mid_vals, mid_vals[1:])])
+        out.append(f"- 5 分変化の σ: markPx ベース {mark_sd:.2f}bps / mid ベース {mid_sd:.2f}bps")
+    else:
+        out.append("- 5 分変化の σ (mark / mid の比較): **未測定** (変化が 2 本未満)")
+    flagged = [i for i, g in enumerate(gaps) if g >= cfg.mark_mid_gap_flag_bps]
+    if flagged:
+        out.append(
+            f"- **markPx と mid の差が {cfg.mark_mid_gap_flag_bps:g}bps 以上あったサンプル: "
+            f"{len(flagged)} / {len(rows)}** — markPx/oracle が板に追いついていない瞬間で、"
+            "この時刻の markPx ベースのベーシスは板で取れた値ではない:"
+        )
+        out.append("")
+        out.append("| 時刻 (UTC) | 現物 mid | perp mid | perp markPx | perp oracle | markベース | midベース |")
+        out.append("|---|---|---|---|---|---|---|")
+        for i in sorted(flagged, key=lambda i: -gaps[i])[:10]:
+            r = rows[i]
+            out.append(
+                f"| {_ts(int(r['time']))} | {float(r['spot_mid']):,.4f} | {float(r['perp_mid']):,.4f} | "
+                f"{float(r['perp_mark']):,.4f} | "
+                + (f"{float(r['perp_oracle']):,.4f}" if r["perp_oracle"] is not None else "—")
+                + f" | {mark_vals[i]:+.2f}bps | {mid_vals[i]:+.2f}bps |"
+            )
+        out.append("")
+    else:
+        out.append(
+            f"- markPx と mid の差が {cfg.mark_mid_gap_flag_bps:g}bps 以上あったサンプル: 0 / {len(rows)}"
+        )
+    return out
+
+
 def _autocorr1(changes: Sequence[float]) -> Optional[float]:
     if len(changes) < 3:
         return None
@@ -468,6 +582,7 @@ def build_report(store: CarryStore, cfg: CarryConfig, now: int, days: Optional[f
         L.append(f"- 受取額 (名目 ${cfg.spot_notional_usd:,.0f} 固定で計算した場合): ${nom:,.4f}")
         apr_f = annualized(amt, cfg.capital_usd, hours / 24)
         L.append(f"- **C = ${cfg.capital_usd:,.0f} に対する年率換算 (コスト控除前): {_pct(apr_f)}**")
+        L.extend(_funding_floor_check(store, cfg))
     L.append("")
 
     # ---- (iii)
@@ -488,6 +603,7 @@ def build_report(store: CarryStore, cfg: CarryConfig, now: int, days: Optional[f
             f"平均 {float(b['avg']):+.2f}bps, 最小 {float(b['lo']):+.2f}bps, 最大 {float(b['hi']):+.2f}bps"
         )
         L.append(f"- 建玉時からの最大逸脱: {max(abs(v - basis_vals[0]) for v in basis_vals):.2f}bps")
+        L.extend(_mark_vs_mid_basis(store, cfg))
         if len(changes) >= 2:
             sd = statistics.stdev(changes)
             L.append(

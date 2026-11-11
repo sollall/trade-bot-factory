@@ -47,6 +47,7 @@ class CarryConfig:
     expected_sharpe: float
     expected_funding_apr: float
     expected_basis_sigma_bps: float
+    mark_mid_gap_flag_bps: float
 
     @property
     def capital_ratio(self) -> float:
@@ -89,6 +90,7 @@ def load_config(path: str | Path) -> CarryConfig:
         expected_sharpe=float(raw.get("expected_sharpe", 0.0)),
         expected_funding_apr=float(raw.get("expected_funding_apr", 0.0)),
         expected_basis_sigma_bps=float(raw.get("expected_basis_sigma_bps", 0.0)),
+        mark_mid_gap_flag_bps=float(raw.get("mark_mid_gap_flag_bps", 20.0)),
     )
     _validate(cfg)
     return cfg
