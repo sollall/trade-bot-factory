@@ -1,0 +1,54 @@
+# 使い捨ての workflow。エージェントは GitHub の API トークンを持っておらず push しかできないので、
+# ラベル作成と PR 作成だけをこの branch への push で一度だけ行う。実行後、この branch は削除する。
+#   1. ラベル paper-trial を作る (preview.yml が見るラベル。既にあれば何もしない)
+#   2. agent/paper-trial-carry-breakers -> main の PR を開く (既にあれば何もしない)
+# ラベルは PR に付けない。付けた時点で preview.yml がお試し Worker を作り D1 を作り直す (成績リセット) ため、
+# Cloudflare 側が整ってから人が付ける。詳しくは PR 本文。
+name: Agent - open paper trial PR
+on:
+  push:
+    branches: [agent/paper-trial-open]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  HEAD_BRANCH: agent/paper-trial-carry-breakers
+  LABEL: paper-trial
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create label (idempotent)
+        run: |
+          if gh label list --json name --jq '.[].name' | grep -qx "$LABEL"; then
+            echo "label $LABEL は既にあります"
+          else
+            gh label create "$LABEL" --color BFD4F2 \
+              --description "この PR の bot だけをお試し paper Worker で動かす (preview.yml)"
+            echo "label $LABEL を作りました"
+          fi
+
+      - name: Open PR (idempotent)
+        run: |
+          if ! git ls-remote --exit-code --heads origin "$HEAD_BRANCH" >/dev/null; then
+            echo "::error::branch $HEAD_BRANCH が origin にありません"; exit 1
+          fi
+          existing=$(gh pr list --head "$HEAD_BRANCH" --state open --json number --jq '.[].number')
+          if [ -n "$existing" ]; then
+            echo "PR #$existing が既に開いています"; exit 0
+          fi
+          if ! gh pr create --base main --head "$HEAD_BRANCH" \
+              --title "paper 試行: ゲートA 通過の2本 (btc_carry_breaker / eth_carry_breaker)" \
+              --body-file .github/paper-trial-pr.md; then
+            echo "::warning::PR を作れませんでした。Settings > Actions > General の"
+            echo "::warning::'Allow GitHub Actions to create and approve pull requests' が無効だとこうなります。"
+            echo "::warning::手で開いてください: ${{ github.server_url }}/${{ github.repository }}/compare/main...$HEAD_BRANCH?expand=1"
+            exit 1
+          fi
