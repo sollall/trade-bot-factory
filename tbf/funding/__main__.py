@@ -17,6 +17,7 @@ import signal
 import sys
 import time
 
+from tbf.funding import clamp
 from tbf.funding.config import load_config
 from tbf.funding.history import fetch_history, has_history
 from tbf.funding.report import build_report
@@ -125,6 +126,15 @@ async def main(argv: list[str]) -> int:
     )
     if res.api_intervals:
         _log("API が建てを返した会場: " + ", ".join(f"{k}={v:g}h" for k, v in sorted(res.api_intervals.items())))
+    caps = clamp.resolve_caps(cfg, res.api_caps)
+    unknown = [
+        f"{v.name}/{s}" for v in cfg.venues for s in cfg.symbols
+        if v.covers(s) and (v.name, s) not in caps
+    ]
+    _log(
+        f"ファンディング上限が分かった組み合わせ {len(caps)} 件"
+        + (f" / 不明 {len(unknown)} 件 ({', '.join(unknown)}) — 確定履歴から推定します" if unknown else "")
+    )
     try:
         # check は設定の点検なので厳しく、run は計測を止めないよう緩く判定する
         res.raise_for_check(cfg) if a.command == "check" else res.raise_for_run(cfg)
@@ -150,7 +160,7 @@ async def main(argv: list[str]) -> int:
     )
     await notifier.send("funding shadow mode started (読み取りのみ・売買なし)")
     await asyncio.gather(
-        Scanner(cfg, client, store, log=_log).run(stop),
+        Scanner(cfg, client, store, log=_log, api_caps=res.api_caps).run(stop),
         _daily_reports(store, cfg, notifier, stop),
     )
     _log("stopped")

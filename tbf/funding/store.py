@@ -60,6 +60,26 @@ CREATE TABLE IF NOT EXISTS funding_history (
 );
 CREATE INDEX IF NOT EXISTS funding_history_time ON funding_history (time);
 
+-- ファンディング上限が張り付いて、上限差でエッジが出ていた連続区間 (clamp.py)。
+-- tradable = 0 は「規則としては検出できたが、参照のみの会場が脚に入るので建てられない」
+CREATE TABLE IF NOT EXISTS clamp_episodes (
+  symbol TEXT NOT NULL, short_venue TEXT NOT NULL, long_venue TEXT NOT NULL,
+  start INTEGER NOT NULL, end INTEGER NOT NULL, polls INTEGER NOT NULL,
+  both_pinned_polls INTEGER NOT NULL,
+  first_edge_apr REAL NOT NULL, max_edge_apr REAL NOT NULL, max_floor_apr REAL,
+  tight_cap_apr REAL NOT NULL, loose_cap_apr REAL, tradable INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS clamp_episodes_start ON clamp_episodes (start);
+
+-- (会場, 銘柄) ごとの上限とその出どころ。値が変わったときだけ 1 行足す。
+-- 会場はイベント中に上限や精算間隔を変える (INIT では Binance が 4h -> 1h に変えた) ので、
+-- 「そのとき何を上限だと思って判定していたか」が後から追えないと検証にならない。
+CREATE TABLE IF NOT EXISTS caps (
+  venue TEXT NOT NULL, symbol TEXT NOT NULL, time INTEGER NOT NULL,
+  rate REAL NOT NULL, interval_hours REAL NOT NULL, source TEXT NOT NULL, note TEXT,
+  PRIMARY KEY (venue, symbol, time)
+);
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -176,6 +196,39 @@ class FundingStore:
                 e.first_net_apr, e.max_net_apr, e.max_gross_apr, e.min_breakeven_days, e.pending_polls,
             ),
         )
+
+    def add_clamp_episode(self, e) -> None:
+        self.conn.execute(
+            """INSERT INTO clamp_episodes
+                 (symbol, short_venue, long_venue, start, end, polls, both_pinned_polls,
+                  first_edge_apr, max_edge_apr, max_floor_apr, tight_cap_apr, loose_cap_apr, tradable)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                e.symbol, e.short_venue, e.long_venue, e.start, e.end, e.polls, e.both_pinned_polls,
+                e.first_edge_apr, e.max_edge_apr, e.max_floor_apr, e.tight_cap_apr,
+                e.loose_cap_apr, int(e.tradable),
+            ),
+        )
+
+    def note_cap(self, time: int, cap) -> bool:
+        """上限を記録する。直前と同じ値なら書かない。変わったときだけ True"""
+        row = self.conn.execute(
+            "SELECT rate, interval_hours, source FROM caps WHERE venue = ? AND symbol = ?"
+            " ORDER BY time DESC LIMIT 1",
+            (cap.venue, cap.symbol),
+        ).fetchone()
+        if (
+            row is not None
+            and abs(row["rate"] - cap.rate) < 1e-12
+            and abs(row["interval_hours"] - cap.interval_hours) < 1e-12
+            and row["source"] == cap.source
+        ):
+            return False
+        self.conn.execute(
+            "INSERT OR REPLACE INTO caps VALUES (?,?,?,?,?,?,?)",
+            (cap.venue, cap.symbol, time, cap.rate, cap.interval_hours, cap.source, cap.note),
+        )
+        return row is not None
 
     def add_history(self, venue: str, symbol: str, points) -> int:
         """確定ファンディングの履歴を入れる (同じ時刻は上書き)"""

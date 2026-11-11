@@ -10,6 +10,12 @@
 #
 # 手数料は「API で確認できたもの (api)」と「公開ドキュメント由来 (doc)」を fee_source で区別する。
 # doc のものは自分の口座の tier で変わるので、実資金を入れる前に口座で再確認が必要。
+#
+# funding_cap は「ファンディングレートの上限 (funding_interval_hours ぶんの分数)」。
+# 張り付いている間は上限の緩い会場が最も払うので、上限差そのものがエッジになる (clamp.py)。
+# 0 = 不明。API が出す会場 (binance / paradex) は check が API 側を正とし、
+# ここに書いた値と食い違えば失敗する。上限は銘柄ごとに違う会場があるので、
+# API が出す会場では「銘柄共通の既定値」としてしか意味がない。
 
 schema_version = 1
 
@@ -21,6 +27,12 @@ adapter = "hyperliquid"
 base_url = "https://api.hyperliquid.xyz/info"
 # metaAndAssetCtxs の funding は 1 時間ぶん (fundingHistory も 1 時間刻み)
 funding_interval_hours = 1
+# 上限を API に出さない。公式ドキュメントにも上限の明記が見つからないので宣言しない。
+# TRA-41 で INIT の確定履歴が -0.005 に張り付いたまま並び (premium は -9% 台)、
+# この会場の実効上限が 0.5%/h であることは**実測では**確認できている。
+# ただし銘柄共通という根拠がないので、ここには書かず確定履歴からの推定に任せる。
+funding_cap = 0.0
+funding_cap_source = "API 未公開。確定履歴からの推定 (clamp.infer_caps) に任せる"
 taker_bps = 4.5
 maker_bps = 1.5
 liquidation_bps = 0.0
@@ -41,6 +53,9 @@ source = "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/inf
 name = "lighter"
 adapter = "lighter"
 base_url = "https://mainnet.zklighter.elliot.ai"
+# 上限を API に出さない。確定履歴からの推定に任せる。
+funding_cap = 0.0
+funding_cap_source = "API 未公開。確定履歴からの推定 (clamp.infer_caps) に任せる"
 # /api/v1/funding-rates の rate は 8 時間ぶんの分数に正規化されている。
 # 根拠: 同時刻の /api/v1/fundings (resolution=1h) の rate は「1 時間あたりの％」で、
 #       funding-rates の rate / 8 と一致する (例: 9.6e-05 / 8 = 1.2e-05 = 0.0012%)。
@@ -64,6 +79,10 @@ base_url = "https://api.prod.paradex.trade"
 # markets/summary が funding_interval_minutes を返すので、設定値と突き合わせる
 funding_interval_hours = 8
 api_interval_field = "funding_interval_minutes"
+# /v1/markets が max_funding_rate を出す (BTC-USD-PERP で 0.02 per 8h = 年率 2,190%)。
+# check が API 側と突き合わせるので、変更されたら失敗する。
+funding_cap = 0.02
+funding_cap_source = "api: /v1/markets の max_funding_rate (funding_period_hours = 8)"
 # Paradex のファンディングは連続課金で、8h は表示上の決めごと。
 # 履歴は /v1/funding/data の累積 funding_index の差で取るので、
 # この時間ごとにインデックスをサンプルする (レートを足し合わせるより正確)。
@@ -85,6 +104,10 @@ adapter = "dydx"
 base_url = "https://indexer.dydx.trade"
 # perpetualMarkets の nextFundingRate は 1 時間ぶん
 funding_interval_hours = 1
+# perpetualMarkets に上限の項目がない (openInterest の cap はあるが別物)。
+# 確定履歴からの推定に任せる。
+funding_cap = 0.0
+funding_cap_source = "API 未公開 (perpetualMarkets に該当項目なし)。確定履歴からの推定に任せる"
 taker_bps = 5.0
 maker_bps = 1.1
 liquidation_bps = 0.0
@@ -106,6 +129,10 @@ adapter = "binance"
 base_url = "https://fapi.binance.com"
 # premiumIndex の lastFundingRate は 8 時間ぶん
 funding_interval_hours = 8
+# 上限は fundingInfo が**銘柄ごとに**返す (BTCUSDT/ETHUSDT は 0.003 per 8h、
+# 一方 INITUSDT は 0.02 per 1h)。銘柄共通の値が無いので宣言せず、API を正とする。
+funding_cap = 0.0
+funding_cap_source = "api: /fapi/v1/fundingInfo の adjustedFundingRateCap (銘柄ごと)"
 reference_only = true
 taker_bps = 4.5
 maker_bps = 2.0

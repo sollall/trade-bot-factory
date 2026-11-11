@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tbf.funding import clamp
 from tbf.funding.config import load_config
 from tbf.funding.report import breakeven_days, build_report, net_apr, pair_sign_flips, walkforward
 from tbf.funding.scanner import Scanner
@@ -19,6 +20,7 @@ from tbf.funding.spread import (
 from tbf.funding.store import FundingStore
 from tbf.funding.venues import (
     Book,
+    CapQuote,
     Session,
     SymbolSnapshot,
     VenueClient,
@@ -83,6 +85,9 @@ class FakeHttp:
             sym = "BTC" if "BTC" in url else "ETH"
             if "summary" in url:
                 return fixture(f"paradex_summary_{sym}")
+            if "markets?market=" in url:
+                # 上限 (max_funding_rate) はこちらに出る。summary には無い
+                return fixture(f"paradex_markets_{sym}")
             if "klines" in url:
                 return fixture(f"paradex_klines_{sym}")
             if "funding/data" in url:
@@ -472,6 +477,10 @@ class FakeClient:
         self.last = {}
         self.fail = set()      # 503 を返す会場
         self.limited = set()   # 429 を返す会場
+
+    async def fetch_caps(self, v):
+        # 上限は clamp.py のテストで直接組むので、scanner のテストでは空にする
+        return []
 
     async def fetch(self, v):
         limited = v.name in self.limited
@@ -1079,3 +1088,243 @@ def test_efficiency_never_exceeds_hindsight_when_holding_pays_no_cost():
     effs = [w.efficiency for w in wins if w.efficiency is not None]
     assert effs, "効率の出る窓があること"
     assert all(e <= 1.0 + 1e-9 for e in effs), effs
+
+
+# ---------------------------------------------------------------- ファンディング上限の張り付き
+#
+# TRA-41 (INIT) の規則。上限は会場ごとに違うので、張り付いている間は
+# 「上限の緩い会場が最も払う」。最初は「2 会場以上が張り付き、かつ上限が違う」と
+# 書いたが、48 時間の確定履歴ではエッジの出ている 27 時間のうち両者張り付きは
+# 3 時間だけで、条件が厳しすぎて 9 割を見逃した。効いているのは片側の非対称。
+
+
+def _clamp_cfg():
+    cfg, _, _ = cfg_and_client()
+    return replace(cfg, symbols=["BTC"], sizes_usd=[1_000.0], ref_size_usd=1_000.0)
+
+
+def _cap(venue, rate, hours=1.0, source=clamp.CONFIG):
+    return clamp.Cap(venue, "BTC", rate, hours, source)
+
+
+def test_pinned_short_leg_makes_the_edge_structural_even_when_alone():
+    """張り付いているのが片側だけでもエッジは出る (ここが最初の条件の穴だった)
+
+    Hyperliquid が下限 -0.5%/h に張り付き、Binance が -1.5%/h 払っている状態。
+    ショート脚 (Hyperliquid) の支払いは上限で止まっているので、差は
+    Hyperliquid 側の都合では詰められない。
+    """
+    cfg = _clamp_cfg()
+    hourly = 24 * 365
+    snaps = [
+        _snap("hyperliquid", "BTC", -0.005 * hourly),   # 下限に張り付き
+        _snap("binance", "BTC", -0.015 * hourly),       # 上限 (2%) には達していない
+    ]
+    caps = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005),
+            ("binance", "BTC"): _cap("binance", 0.02)}
+    edges = clamp.detect(snaps, cfg, caps)
+    assert len(edges) == 1, edges
+    e = edges[0]
+    # 払う側 = ショート脚が張り付いている会場
+    assert (e.short_venue, e.long_venue, e.pinned_venue) == ("hyperliquid", "binance", "hyperliquid")
+    assert e.edge_apr == pytest.approx(0.01 * hourly)
+    assert e.both_pinned is False
+    # 片側だけなので決定論的な下限は出せない
+    assert e.floor_apr is None
+
+
+def test_both_pinned_gives_the_deterministic_floor_from_the_cap_gap():
+    cfg = _clamp_cfg()
+    hourly = 24 * 365
+    snaps = [
+        _snap("hyperliquid", "BTC", -0.005 * hourly),
+        _snap("binance", "BTC", -0.02 * hourly),
+    ]
+    caps = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005),
+            ("binance", "BTC"): _cap("binance", 0.02)}
+    e = clamp.detect(snaps, cfg, caps)[0]
+    assert e.both_pinned is True
+    # 両者が動けない間の差はちょうど上限差
+    assert e.floor_apr == pytest.approx((0.02 - 0.005) * hourly)
+    assert e.edge_apr == pytest.approx(e.floor_apr)
+
+
+def test_pin_on_the_upper_bound_flips_which_leg_is_the_long():
+    """符号が逆 (ロングが払う側) のときは、張り付いた会場がロング脚になる"""
+    cfg = _clamp_cfg()
+    hourly = 24 * 365
+    snaps = [
+        _snap("hyperliquid", "BTC", 0.005 * hourly),   # 上限に張り付き -> 良いロング脚
+        _snap("binance", "BTC", 0.015 * hourly),       # こちらをショートして受け取る
+    ]
+    caps = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005),
+            ("binance", "BTC"): _cap("binance", 0.02)}
+    e = clamp.detect(snaps, cfg, caps)[0]
+    assert (e.short_venue, e.long_venue) == ("binance", "hyperliquid")
+    assert e.edge_apr == pytest.approx(0.01 * hourly)
+
+
+def test_no_edge_when_the_other_venue_stays_inside_the_tight_cap():
+    """相手が張り付き値を越えて払っていなければエッジにならない"""
+    cfg = _clamp_cfg()
+    hourly = 24 * 365
+    snaps = [
+        _snap("hyperliquid", "BTC", -0.005 * hourly),
+        _snap("binance", "BTC", -0.002 * hourly),
+    ]
+    caps = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005),
+            ("binance", "BTC"): _cap("binance", 0.02)}
+    assert clamp.detect(snaps, cfg, caps) == []
+
+
+def test_unknown_cap_cannot_be_pinned():
+    """上限が分からない会場は「張り付いている」と判定しない (推測で発火させない)"""
+    cfg = _clamp_cfg()
+    hourly = 24 * 365
+    snaps = [_snap("hyperliquid", "BTC", -0.005 * hourly), _snap("binance", "BTC", -0.015 * hourly)]
+    assert clamp.detect(snaps, cfg, {("binance", "BTC"): _cap("binance", 0.02)}) == []
+
+
+def test_reference_only_venue_is_detected_but_marked_untradable():
+    """参照のみの会場が脚に入る組み合わせも記録する (取れないことを含めて記録)"""
+    cfg = _clamp_cfg()
+    hourly = 24 * 365
+    snaps = [
+        _snap("hyperliquid", "BTC", -0.005 * hourly),
+        _snap("binance", "BTC", -0.015 * hourly),   # venues.toml で reference_only = true
+    ]
+    caps = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005),
+            ("binance", "BTC"): _cap("binance", 0.02)}
+    e = clamp.detect(snaps, cfg, caps)[0]
+    assert e.tradable is False
+
+
+def test_caps_come_from_the_api_and_beat_the_registry():
+    """上限は銘柄ごとに違う。API が出す会場は API を正とする"""
+    cfg = _clamp_cfg()
+    quote = CapQuote("binance", "BTC", 0.003, 8.0, "fundingInfo")
+    caps = clamp.resolve_caps(cfg, {("binance", "BTC"): quote})
+    assert caps[("binance", "BTC")].source == clamp.API
+    assert caps[("binance", "BTC")].rate == 0.003
+    # 上限が無い会場は config -> inferred の順
+    assert ("hyperliquid", "BTC") not in caps
+    inferred = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005, source=clamp.INFERRED)}
+    caps = clamp.resolve_caps(cfg, {}, inferred)
+    assert caps[("hyperliquid", "BTC")].source == clamp.INFERRED
+
+
+async def test_check_reads_the_funding_cap_from_every_venue_that_publishes_one():
+    cfg, client, _ = cfg_and_client()
+    res = await check_all(client, verify_intervals=False)
+    assert not res.config_errors, res.config_errors
+    # Binance は銘柄ごとに違う値を返す (BTCUSDT は 0.3%/8h)
+    assert res.api_caps[("binance", "BTC")].rate == pytest.approx(0.003)
+    assert res.api_caps[("binance", "BTC")].interval_hours == 8
+    # Paradex は max_funding_rate を出す
+    assert res.api_caps[("paradex", "BTC")].rate == pytest.approx(0.02)
+    # 上限を出さない会場は入らない
+    assert ("hyperliquid", "BTC") not in res.api_caps
+    assert any("上限" in l and "不明" in l for l in res.lines), "不明な会場が見えること"
+
+
+async def test_check_fails_when_the_registry_cap_disagrees_with_the_api():
+    """会場が上限を変えたら設定の誤りとして落とす (建ての検証と同じ方針)"""
+    cfg, client, _ = cfg_and_client()
+    bad = [replace(v, funding_cap=0.001) if v.name == "paradex" else v for v in cfg.venues]
+    client.cfg = replace(cfg, venues=bad)
+    res = await check_all(client, verify_intervals=False)
+    assert any("funding_cap の食い違い" in e for e in res.config_errors), res.config_errors
+
+
+def test_infer_caps_needs_a_repeated_extreme():
+    """上限を公開しない会場は「同じ値が並び、それを超えない」ことから推定する"""
+    pts = _points(0, [-0.005, -0.005, -0.005, -0.002, -0.001])
+    caps = clamp.infer_caps({("hyperliquid", "BTC"): pts}, min_repeats=3)
+    assert caps[("hyperliquid", "BTC")].rate == pytest.approx(0.005)
+    assert caps[("hyperliquid", "BTC")].source == clamp.INFERRED
+    # 並びが足りなければ推定しない (一度だけ大きく出た値を上限と呼ばない)
+    pts = _points(0, [-0.005, -0.002, -0.001])
+    assert clamp.infer_caps({("hyperliquid", "BTC"): pts}, min_repeats=3) == {}
+
+
+def test_clamp_tracker_measures_duration_and_both_pinned_share():
+    tracker = clamp.ClampTracker(0.05)
+    def edge(both):
+        return clamp.ClampEdge("BTC", "hyperliquid", "binance", 100.0, "hyperliquid",
+                               40.0, 180.0, both, 140.0 if both else None, True)
+    assert tracker.update(0, [edge(False)]) == []
+    assert tracker.update(60_000, [edge(True)]) == []
+    closed = tracker.update(120_000, [])
+    assert len(closed) == 1
+    ep = closed[0]
+    assert ep.polls == 2 and ep.both_pinned_polls == 1
+    assert ep.duration_sec == 60
+    assert ep.max_floor_apr == 140.0
+
+
+async def test_scanner_records_a_clamp_episode(tmp_path):
+    cfg = _clamp_cfg()
+    cfg = replace(cfg, venues=[v for v in cfg.venues if v.name in ("hyperliquid", "dydx")])
+    hourly = 24 * 365
+    t = [1_700_000_000_000]
+    client = FakeClient(cfg, {"hyperliquid": -0.005 * hourly, "dydx": -0.015 * hourly}, lambda: t[0])
+    scanner, store = scanner_for(tmp_path, cfg, client, lambda: t[0])
+    # 上限は会場が出さないので、推定値を入れて計測する
+    scanner.caps = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005, source=clamp.INFERRED),
+                    ("dydx", "BTC"): _cap("dydx", 0.02, source=clamp.INFERRED)}
+    scanner.next_cap_check = t[0] + 10 ** 9   # 取り直しで上書きさせない
+
+    for _ in range(2):
+        await scanner.poll_once()
+        t[0] += 60_000
+    client.aprs["dydx"] = -0.001 * hourly     # 相手が上限の内側に戻る -> 区間が閉じる
+    await scanner.poll_once()
+
+    rows = store.query("SELECT * FROM clamp_episodes")
+    assert len(rows) == 1, rows
+    assert (rows[0]["short_venue"], rows[0]["long_venue"]) == ("hyperliquid", "dydx")
+    assert rows[0]["polls"] == 2
+    assert rows[0]["tradable"] == 1
+    assert rows[0]["max_edge_apr"] == pytest.approx(0.01 * hourly)
+
+
+def test_caps_table_records_only_changes(tmp_path):
+    """上限が変わった瞬間を残す (会場はイベント中に上限を変える)"""
+    store = FundingStore(tmp_path / "f.sqlite", 300.0)
+    first = _cap("binance", 0.003, 8.0)
+    assert store.note_cap(1_000, first) is False      # 初回は「変化」ではない
+    assert store.note_cap(2_000, first) is False      # 同じ値は書かない
+    assert store.note_cap(3_000, _cap("binance", 0.02, 1.0)) is True
+    store.commit()
+    rows = store.query("SELECT * FROM caps ORDER BY time")
+    assert [(r["rate"], r["interval_hours"]) for r in rows] == [(0.003, 8.0), (0.02, 1.0)]
+
+
+async def test_report_shows_the_clamp_section_with_caps_and_episodes(tmp_path):
+    cfg = _clamp_cfg()
+    cfg = replace(cfg, venues=[v for v in cfg.venues if v.name in ("hyperliquid", "dydx")])
+    hourly = 24 * 365
+    t = [1_700_000_000_000]
+    client = FakeClient(cfg, {"hyperliquid": -0.005 * hourly, "dydx": -0.015 * hourly}, lambda: t[0])
+    scanner, store = scanner_for(tmp_path, cfg, client, lambda: t[0])
+    scanner.caps = {("hyperliquid", "BTC"): _cap("hyperliquid", 0.005, source=clamp.INFERRED),
+                    ("dydx", "BTC"): _cap("dydx", 0.02, source=clamp.CONFIG)}
+    scanner.next_cap_check = t[0] + 10 ** 9
+    store.note_cap(t[0], scanner.caps[("dydx", "BTC")])
+    # hyperliquid は上限を公開しないので caps に入れず、確定履歴からの推定に出させる
+    store.add_history("hyperliquid", "BTC", _points(t[0] // HOUR - 10, [-0.005] * 4 + [-0.001]))
+    for _ in range(2):
+        await scanner.poll_once()
+        t[0] += 60_000
+    client.aprs["dydx"] = -0.001 * hourly
+    await scanner.poll_once()
+    store.commit()
+
+    text = build_report(store, cfg, 0, until=t[0] + 1)
+    section = text.split("== 13.")[1]
+    assert "== 13. ファンディング上限の張り付き" in text
+    # 宣言した上限 (config) と、履歴から推定した上限が区別して出ること
+    assert "config" in section
+    assert "確定履歴からの推定" in section
+    assert "0.005/1h" in section and "4,380%" in section
+    assert "hyperliquid" in section

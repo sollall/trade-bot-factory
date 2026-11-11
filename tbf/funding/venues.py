@@ -348,6 +348,68 @@ async def verify_binance(s: Session, v: VenueConfig, native: str) -> IntervalChe
     return IntervalCheck(v.name, float(hit["fundingIntervalHours"]), f"fundingInfo の fundingIntervalHours")
 
 
+# ------------------------------------------------------------------ 上限の取得
+#
+# ファンディングには会場ごとに上限がある。張り付いている間は「上限の緩い会場が
+# 最も払う」ので、上限差そのものがエッジになる (clamp.py)。
+# 上限は会場ごとではなく**銘柄ごと**に違う (Binance の BTCUSDT は ±0.3%/8h だが
+# INITUSDT は ±2.0%/1h)。出している会場からは必ず API で取り、設定値は検算に使う。
+
+
+@dataclass(frozen=True)
+class CapQuote:
+    """API が公開しているファンディング上限 (その会場の建てぶんの分数・絶対値)"""
+
+    venue: str
+    symbol: str
+    rate: float
+    interval_hours: float
+    note: str = ""
+
+
+async def caps_binance(s: Session, v: VenueConfig, symbols: list[str]) -> list[CapQuote]:
+    """fundingInfo は銘柄ごとに上限と精算間隔を返す (820 銘柄ぶん)"""
+    rows = {r["symbol"]: r for r in await s.json("GET", f"{v.base_url}/fapi/v1/fundingInfo")}
+    out = []
+    for sym in symbols:
+        hit = rows.get(v.symbols[sym])
+        if hit is None:
+            continue  # fundingInfo に無い銘柄は既定値。既定値は公表されていないので宣言しない
+        out.append(
+            CapQuote(v.name, sym, abs(float(hit["adjustedFundingRateCap"])),
+                     float(hit["fundingIntervalHours"]), "fundingInfo.adjustedFundingRateCap")
+        )
+    return out
+
+
+async def caps_paradex(s: Session, v: VenueConfig, symbols: list[str]) -> list[CapQuote]:
+    out = []
+    for sym in symbols:
+        native = v.symbols[sym]
+        res = (await s.json("GET", f"{v.base_url}/v1/markets?market={native}")).get("results") or []
+        if not res:
+            continue
+        m = res[0]
+        if m.get("max_funding_rate") is None:
+            continue
+        hours = float(m.get("funding_period_hours") or v.funding_interval_hours)
+        out.append(
+            CapQuote(v.name, sym, abs(float(m["max_funding_rate"])), hours,
+                     "markets.max_funding_rate / funding_period_hours")
+        )
+    return out
+
+
+CapProbe = Callable[[Session, VenueConfig, list[str]], Awaitable[list[CapQuote]]]
+
+# 上限を公開していない会場 (hyperliquid / dydx / lighter) はここに無い。
+# その会場の上限は venues.toml の funding_cap か、確定履歴からの推定 (clamp.infer_caps) で補う。
+CAP_PROBES: dict[str, CapProbe] = {
+    "binance": caps_binance,
+    "paradex": caps_paradex,
+}
+
+
 Verifier = Callable[[Session, VenueConfig, str], Awaitable[IntervalCheck]]
 
 VERIFIERS: dict[str, Verifier] = {
@@ -391,6 +453,14 @@ class VenueClient:
             self.last[v.name] = (s.latency_ms, s.calls, s.rate_limited)
         return VenueSnapshot(v.name, self.clock(), s.latency_ms, s.calls, symbols)
 
+    async def fetch_caps(self, v: VenueConfig) -> list[CapQuote]:
+        """API が公開しているファンディング上限を取る (出していない会場は空)"""
+        probe = CAP_PROBES.get(v.adapter)
+        syms = self.symbols_for(v)
+        if probe is None or not syms:
+            return []
+        return await probe(Session(self.http), v, syms)
+
     async def verify_interval(self, v: VenueConfig) -> Optional[IntervalCheck]:
         """API 側からファンディングの建てを確かめる (check のときだけ)"""
         verifier = VERIFIERS.get(v.adapter)
@@ -412,6 +482,8 @@ class CheckResult:
     errors: dict[str, str]
     # 設定の誤り (建ての食い違いなど)。接続できないのとは別扱い
     config_errors: list[str]
+    # (会場, 銘柄) -> API が公開しているファンディング上限 (出していない会場は入らない)
+    api_caps: dict[tuple[str, str], CapQuote] = field(default_factory=dict)
 
     def ok_tradable(self, cfg: FundingConfig) -> list[str]:
         return [v.name for v in cfg.tradable if v.name in self.ok]
@@ -457,7 +529,38 @@ async def check_all(client: VenueClient, verify_intervals: bool = True) -> Check
     config_errors: list[str] = []
     ok: set[str] = set()
     api_intervals: dict[str, float] = {}
+    api_caps: dict[tuple[str, str], CapQuote] = {}
     verified: dict[str, IntervalCheck] = {}
+
+    # ファンディング上限: 出している会場からは API で取り、venues.toml と突き合わせる。
+    # 上限の取り違えは建ての取り違えと同じで、張り付きの判定を静かに壊す。
+    cap_results = await asyncio.gather(*(client.fetch_caps(v) for v in cfg.venues), return_exceptions=True)
+    for v, quotes in zip(cfg.venues, cap_results):
+        if isinstance(quotes, BaseException):
+            lines.append(f"[上限] {v.name:>12}: 取得できませんでした ({type(quotes).__name__}: {quotes})")
+            continue
+        for q in quotes:
+            api_caps[(q.venue, q.symbol)] = q
+            mark = "OK" if v.funding_cap <= 0 or abs(v.funding_cap - q.rate) < 1e-9 else "NG"
+            declared = f"設定 {v.funding_cap:g}" if v.funding_cap > 0 else "設定なし"
+            lines.append(
+                f"[上限] {v.name:>12} {q.symbol:<4}: {mark} API {q.rate:g}/{q.interval_hours:g}h"
+                f" (年率 {annualize(q.rate, q.interval_hours) * 100:,.0f}%) / {declared}  ({q.note})"
+            )
+            if mark == "NG":
+                config_errors.append(
+                    f"{v.name} {q.symbol}: funding_cap の食い違い "
+                    f"(設定 {v.funding_cap:g} / API {q.rate:g} per {q.interval_hours:g}h)"
+                )
+    for v in cfg.venues:
+        for sym in cfg.symbols:
+            if v.covers(sym) and (v.name, sym) not in api_caps and v.funding_cap <= 0:
+                # 上限が分からない会場は張り付きを判定できない。
+                # 止める理由にはしないが、見えないままにはしない (report で推定を出す)
+                lines.append(
+                    f"[上限] {v.name:>12} {sym:<4}: 不明 — API も venues.toml も上限を出していません"
+                    f" (確定履歴からの推定のみ)"
+                )
     if verify_intervals:
         checks = await asyncio.gather(
             *(client.verify_interval(v) for v in cfg.venues), return_exceptions=True
@@ -527,7 +630,7 @@ async def check_all(client: VenueClient, verify_intervals: bool = True) -> Check
             f"[{tag}] {v.name:>12}      {r.calls} calls {r.latency_ms:.0f}ms"
             f"  taker {v.taker_bps:g}bps maker {v.maker_bps:g}bps  ({v.fee_source or 'fee_source 未記入'})"
         )
-    return CheckResult(api_intervals, lines, ok, errors, config_errors)
+    return CheckResult(api_intervals, lines, ok, errors, config_errors, api_caps)
 
 
 def _notional(levels: tuple[tuple[float, float], ...]) -> float:

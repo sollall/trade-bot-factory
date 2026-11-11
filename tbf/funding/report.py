@@ -13,9 +13,11 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Optional
 
+from tbf.funding import clamp
 from tbf.funding.config import FundingConfig
 from tbf.funding.spread import BPS, DAYS_PER_YEAR
 from tbf.funding.store import FundingStore
+from tbf.funding.venues import annualize
 
 
 def net_apr(gross_apr: float, cost_bps: float, hold_days: float) -> float:
@@ -634,7 +636,78 @@ def build_report(store: FundingStore, cfg: FundingConfig, since: int, until: Opt
         L.append("(なし — 全ての会場で全サイズを板で約定できた)")
     for r in rows:
         L.append(f"  {r['venue']:<14}{r['symbol']:<5}片脚 ${r['size_usd']:>10,.0f}  {r['n']} 回")
+
+    L.extend(_clamp_sections(store, cfg, since, until))
     return "\n".join(L)
+
+
+def _clamp_sections(store: FundingStore, cfg: FundingConfig, since: int, until: int) -> list[str]:
+    """ファンディング上限の張り付き (TRA-41 由来の規則)
+
+    上限は会場ごとに違うので、張り付いている間は「上限の緩い会場が最も払う」。
+    こちらが払う脚が上限に張り付いていれば、その脚はもう悪化できないので差は構造的に残る。
+    """
+    L = ["\n== 13. ファンディング上限の張り付き (上限差エッジ)"]
+
+    # 使っている上限と、その出どころ。api > config > inferred の順で強い
+    L.append("-- 上限 (この計測で使っている値) --")
+    w = [14, 5, 12, 10, 10]
+    L.append(_row(list(zip(["会場", "銘柄", "上限", "年率", "出どころ"], w))))
+    rows = store.query(
+        """SELECT c.venue, c.symbol, c.rate, c.interval_hours, c.source, c.note FROM caps c
+           JOIN (SELECT venue, symbol, MAX(time) t FROM caps GROUP BY venue, symbol) m
+             ON c.venue = m.venue AND c.symbol = m.symbol AND c.time = m.t
+           ORDER BY c.venue, c.symbol"""
+    )
+    known = {(r["venue"], r["symbol"]) for r in rows}
+    for r in rows:
+        apr = annualize(r["rate"], r["interval_hours"])
+        L.append(_row(list(zip(
+            [r["venue"], r["symbol"], f"{r['rate']:g}/{r['interval_hours']:g}h",
+             f"{apr * 100:,.0f}%", r["source"]], w))))
+
+    # 上限を公開していない会場は確定履歴から推定する (Hyperliquid / dYdX / Lighter)
+    missing = sorted(
+        (v.name, s) for v in cfg.venues for s in cfg.symbols
+        if v.covers(s) and (v.name, s) not in known
+    )
+    hist = {k: v for k, v in store.history(since, until).items() if k in set(missing)}
+    inferred = clamp.infer_caps(hist, cfg.min_clamp_repeats)
+    if missing:
+        L.append("-- 確定履歴からの推定 (上限を公開していない会場) --")
+    for key in missing:
+        cap = inferred.get(key)
+        if cap is None:
+            L.append(f"  {key[0]:<14}{key[1]:<5}推定できません (履歴が無いか、同じ値の並びが "
+                     f"{cfg.min_clamp_repeats} 区間未満)")
+            continue
+        L.append(f"  {key[0]:<14}{key[1]:<5}{cap.rate:g}/{cap.interval_hours:g}h "
+                 f"(年率 {cap.apr * 100:,.0f}%)  {cap.note}")
+
+    # 検出したエピソード
+    eps = store.query(
+        """SELECT * FROM clamp_episodes WHERE end >= ? AND start < ? ORDER BY max_edge_apr DESC LIMIT 20""",
+        (since, until),
+    )
+    L.append("-- 検出した区間 --")
+    if not eps:
+        L.append("(なし — 上限に張り付いた会場と、その上限を越えて払う会場の組み合わせは出ていません)")
+        return L
+    w2 = [5, 13, 13, 9, 9, 10, 10, 8]
+    L.append(_row(list(zip(
+        ["銘柄", "ショート", "ロング", "継続", "両者張付", "初回の差", "最大の差", "建てられる"], w2))))
+    for e in eps:
+        both = f"{e['both_pinned_polls']}/{e['polls']}"
+        floor = f" 下限 {e['max_floor_apr'] * 100:+,.0f}%" if e["max_floor_apr"] else ""
+        L.append(_row(list(zip(
+            [e["symbol"], e["short_venue"], e["long_venue"], _hours((e["end"] - e["start"]) / 1000),
+             both, f"{e['first_edge_apr'] * 100:+,.0f}%",
+             f"{e['max_edge_apr'] * 100:+,.0f}%" + floor, "はい" if e["tradable"] else "いいえ"], w2))))
+    untradable = sum(1 for e in eps if not e["tradable"])
+    if untradable:
+        L.append(f"うち {untradable} 件は参照のみの会場が脚に入るので建てられません "
+                 f"(規則としては検出できている、という記録)")
+    return L
 
 
 def _ts(ms: int) -> str:

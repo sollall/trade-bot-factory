@@ -35,6 +35,12 @@ class VenueConfig:
     # 連続課金でファンディングの「建て」が表示上の決めごとでしかない会場 (Paradex)。
     # 履歴を累積インデックスの差で取るので、サンプル間隔を別に持つ
     history_sample_hours: float = 0.0
+    # ファンディングレートの上限 (funding_interval_hours ぶんの分数・絶対値)。
+    # 0 = 不明。会場が API で出すなら check がそちらを優先し、食い違えば失敗する。
+    # 銘柄ごとに違う会場 (Binance は BTCUSDT ±0.3%/8h、INITUSDT ±2.0%/1h) では
+    # ここは既定値にしかならないので、API から取れる会場は API を正とする。
+    funding_cap: float = 0.0
+    funding_cap_source: str = ""
 
     def covers(self, symbol: str) -> bool:
         return symbol in self.symbols
@@ -73,6 +79,17 @@ class FundingConfig:
     min_coverage: float = 0.9
     # 片脚の建玉に対するレバレッジ。資本に対する利回りの換算に使う (1.0 = フル担保)
     leverage: float = 1.0
+    # ---- ファンディング上限の張り付き (clamp.py)
+    # 上限に対する相対の許容。会場の返す値は丸めで上限をわずかに下回ることがある
+    clamp_tol_frac: float = 0.001
+    # 上限差エッジとして記録する最小の年率。上限張り付きは年率では必ず巨大になる
+    # (0.5%/h = 年率 4,380%) ので、ここは「符号がある」ことの確認用の下駄にすぎない
+    min_clamp_edge_apr: float = 0.05
+    # 確定履歴から上限を推定するとき、同じ値が何区間並べば上限と見なすか
+    min_clamp_repeats: int = 3
+    # 上限を取り直す間隔 (秒)。会場はイベント中に上限や精算間隔を変える
+    # (INIT では Binance が精算間隔を 4h -> 1h に変えた) ので、起動時だけでは足りない
+    cap_recheck_sec: float = 3600.0
     venues_file: str = ""
     # check で埋める: 会場 -> API が返した建て (時間)
     api_intervals: dict[str, float] = field(default_factory=dict)
@@ -109,6 +126,8 @@ def _venue(raw: dict, defaults: dict) -> VenueConfig:
         source=str(raw.get("source", "")),
         api_interval_field=str(raw.get("api_interval_field", "")),
         history_sample_hours=float(raw.get("history_sample_hours", 0.0)),
+        funding_cap=float(raw.get("funding_cap", 0.0)),
+        funding_cap_source=str(raw.get("funding_cap_source", "")),
     )
 
 
@@ -165,5 +184,9 @@ def load_config(path: str | Path, venues_path: str | Path | None = None) -> Fund
         entry_grid_hours=float(raw.get("entry_grid_hours", 6.0)),
         min_coverage=float(raw.get("min_coverage", 0.9)),
         leverage=float(raw.get("leverage", 1.0)),
+        clamp_tol_frac=float(raw.get("clamp_tol_frac", 0.001)),
+        min_clamp_edge_apr=float(raw.get("min_clamp_edge_apr", 0.05)),
+        min_clamp_repeats=int(raw.get("min_clamp_repeats", 3)),
+        cap_recheck_sec=float(raw.get("cap_recheck_sec", 3600.0)),
         venues_file=str(vpath),
     )
