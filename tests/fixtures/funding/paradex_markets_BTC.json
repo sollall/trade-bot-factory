@@ -1,0 +1,15 @@
+{
+ "results": [
+  {
+   "symbol": "BTC-USD-PERP",
+   "funding_period_hours": 8,
+   "max_funding_rate": "0.02",
+   "max_funding_rate_change": "0.0002",
+   "clamp_rate": "0.0005",
+   "interest_rate": "0.0001",
+   "funding_multiplier": 1,
+   "asset_kind": "PERP",
+   "market_kind": "cross"
+  }
+ ]
+}
