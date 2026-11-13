@@ -71,6 +71,7 @@ def chain(bot: Bot, parts: Sequence[BacktestResult]) -> BacktestResult:
     events = []
     funding = fees = transfers = 0.0
     in_market = total = 0
+    limit_orders = maker_fills = fallbacks = skips = 0
     capital = bot.capital
     for r in parts:
         if len(r.equity) < 2:
@@ -85,11 +86,16 @@ def chain(bot: Bot, parts: Sequence[BacktestResult]) -> BacktestResult:
         transfers += r.transfer_costs * k
         in_market += r.bars_in_market
         total += r.bars_total
+        limit_orders += r.limit_orders
+        maker_fills += r.limit_maker_fills
+        fallbacks += r.limit_fallbacks
+        skips += r.limit_skips
         capital = pts[-1].equity
     last = parts[-1].final if parts else Portfolio()
     return BacktestResult(
         bot.id, compute_metrics(equity, fills), equity, fills, None, last, events,
         funding, fees, transfers, in_market, total,
+        limit_orders, maker_fills, fallbacks, skips,
     )
 
 

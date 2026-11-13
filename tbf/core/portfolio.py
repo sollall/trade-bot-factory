@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
-from tbf.core.instrument import Fees, Instrument
+from tbf.core.instrument import Fees, Instrument, OrderType
 from tbf.core.types import Fill, Position, Side
 
 
@@ -97,11 +97,32 @@ def effective_leverage(pf: Portfolio, instruments, prices, venue: str) -> float:
     return notional / value if value > 0 else math.inf
 
 
-def simulate_fill(alias: str, side: Side, qty: float, ref_price: float, time: int, fees: Fees) -> Fill:
-    """スリッページ・手数料込みのシミュレーション約定"""
-    slip = fees.slippage_bps / 10_000 * ref_price
-    price = ref_price + slip if side == "buy" else ref_price - slip
-    return Fill(time, side, qty, price, qty * price * fees.taker_rate, instrument=alias)
+def simulate_fill(
+    alias: str,
+    side: Side,
+    qty: float,
+    ref_price: float,
+    time: int,
+    fees: Fees,
+    order_type: OrderType = "market",
+) -> Fill:
+    """スリッページ・手数料込みのシミュレーション約定。
+
+    成行 (market): 板を食うので不利な側に slippage_bps ずれ、taker_rate を払う。
+    指値 (limit):  板に置いた値段でそのまま約定するのでずれはなく、maker_rate を払う
+                   (マイナスならリベートを受け取る)。約定したかどうかの判定は呼び出し側 (limit_filled)。
+    """
+    if order_type == "limit":
+        price = ref_price
+    else:
+        slip = fees.slippage_bps / 10_000 * ref_price
+        price = ref_price + slip if side == "buy" else ref_price - slip
+    return Fill(time, side, qty, price, qty * price * fees.rate(order_type), instrument=alias)
+
+
+def limit_filled(side: Side, limit_price: float, low: float, high: float) -> bool:
+    """置いた指値に値段が来たか。買いは安値が指値以下、売りは高値が指値以上なら約定"""
+    return low <= limit_price if side == "buy" else high >= limit_price
 
 
 def apply_fill(pf: Portfolio, inst: Instrument, fill: Fill) -> Fill:

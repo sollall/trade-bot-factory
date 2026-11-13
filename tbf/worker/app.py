@@ -170,7 +170,7 @@ class App:
 
     async def _prices(self, bot: Bot, now: int) -> dict[str, float]:
         by_venue = await fetch_prices([bot], self.runtime(now))
-        return {a: by_venue.get(i.venue, {}).get(i.symbol, 0.0) for a, i in bot.instruments.items()}
+        return {a: by_venue.get(i.price_venue, {}).get(i.price_symbol, 0.0) for a, i in bot.instruments.items()}
 
     async def handle(self, method: str, url: str, headers: dict[str, str], now: Optional[int] = None) -> HttpResponse:
         now = now if now is not None else int(time.time() * 1000)

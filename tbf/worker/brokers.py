@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from typing import Optional, Protocol
 from urllib.parse import urlencode
 
-from tbf.core.instrument import Instrument
-from tbf.core.portfolio import simulate_fill
+from tbf.core.instrument import Instrument, OrderType
+from tbf.core.portfolio import limit_filled, simulate_fill
 from tbf.core.types import Fill, Side
 from tbf.http import Http
 
@@ -28,12 +28,27 @@ class OrderRequest:
     # 冪等キー (同じキーで二重発注しない)
     client_order_id: str
     now: int
+    # 成行か指値か (省略時は銘柄の既定)
+    order_type: Optional[OrderType] = None
+    # 指値を置く値段 (省略時は戦略が見た値段 = post_price から ref_price を使う)
+    limit_price: Optional[float] = None
+
+    @property
+    def kind(self) -> OrderType:
+        return self.order_type or self.instrument.order_type
+
+    @property
+    def post_price(self) -> float:
+        """指値を置く値段。戦略が判断に使った値段をそのまま置く"""
+        return self.limit_price if self.limit_price is not None else self.ref_price
 
 
 @dataclass(frozen=True)
 class BrokerFill:
     fill: Fill
     order_id: Optional[str]
+    # 指値がメイカーとして約定したか (成行だった / 成行へ落ちたときは False)
+    maker: bool = False
 
 
 class Broker(Protocol):
@@ -43,10 +58,23 @@ class Broker(Protocol):
 
 
 class PaperBroker:
-    """現在価格 + スリッページ + 手数料で即時約定 (バックテストと同じモデル)"""
+    """現在価格 + スリッページ + 手数料で即時約定 (バックテストと同じモデル)。
 
-    async def execute(self, req: OrderRequest) -> BrokerFill:
-        f = simulate_fill(req.alias, req.side, req.qty, req.ref_price, req.now, req.instrument.fees)  # type: ignore[arg-type]
+    指値は「戦略が見た値段 (post_price) に置き、今の値段がそこまで来ていればメイカーで約定」と見なす。
+    来ていなければ銘柄の unfilled 方針に従う ("market" なら成行、"skip" なら未約定 = None)。
+    バックテストと違い cron の 1 回ぶんしか待てないので、ここでの未約定は「次の tick で出し直す」になる。
+    """
+
+    async def execute(self, req: OrderRequest) -> Optional[BrokerFill]:
+        inst, fees = req.instrument, req.instrument.fees
+        if req.kind == "limit":
+            post = req.post_price
+            if limit_filled(req.side, post, req.ref_price, req.ref_price):
+                f = simulate_fill(req.alias, req.side, req.qty, post, req.now, fees, "limit")  # type: ignore[arg-type]
+                return BrokerFill(f, None, maker=True)
+            if inst.unfilled == "skip":
+                return None
+        f = simulate_fill(req.alias, req.side, req.qty, req.ref_price, req.now, fees)  # type: ignore[arg-type]
         return BrokerFill(f, None)
 
 
@@ -111,6 +139,9 @@ class BinanceBroker:
         inst = req.instrument
         if (inst.venue, inst.kind) != ("binance", "spot"):
             raise RuntimeError(f"BinanceBroker cannot trade {inst}")
+        if req.kind == "limit":
+            # 本番の指値 (未約定の監視・取り消し・成行への切り替え) は未実装。TRA-57 の範囲外
+            raise RuntimeError(f"BinanceBroker: 指値の本番発注は未対応です ({inst})")
         info = await self.symbol_info(inst.symbol)
         qty = floor_to_step(req.qty, info.step_size)
         if qty < info.min_qty or qty * req.ref_price < info.min_notional:

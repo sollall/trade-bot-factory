@@ -22,6 +22,7 @@ from tbf.core.portfolio import (
     Portfolio,
     effective_leverage,
     equity,
+    limit_filled,
     liquidate_venue,
     liquidated_venues,
     settle_funding,
@@ -61,6 +62,17 @@ class BacktestResult:
     transfer_costs: float = 0.0
     bars_in_market: int = 0
     bars_total: int = 0
+    # 指値 (order_type="limit") で出した注文の内訳
+    limit_orders: int = 0
+    limit_maker_fills: int = 0
+    # 足の時間内に指値が約定せず、成行へ落とした / 見送った回数
+    limit_fallbacks: int = 0
+    limit_skips: int = 0
+
+    @property
+    def fallback_rate(self) -> Optional[float]:
+        """指値のうち成行へ落ちた割合。指値を使っていなければ None"""
+        return self.limit_fallbacks / self.limit_orders if self.limit_orders else None
 
     @property
     def apr(self) -> float:
@@ -94,6 +106,11 @@ class BacktestResult:
             "transfer_costs": self.transfer_costs,
             "price_pnl": self.price_pnl,
             "time_in_market": self.bars_in_market / self.bars_total if self.bars_total else 0.0,
+            "limit_orders": self.limit_orders,
+            "limit_maker_fills": self.limit_maker_fills,
+            "limit_fallbacks": self.limit_fallbacks,
+            "limit_skips": self.limit_skips,
+            "fallback_rate": self.fallback_rate,
             "entries": self.count("enter"),
             "rebalances": self.count("rebalance"),
             "liquidations": self.count("liquidation"),
@@ -138,9 +155,27 @@ async def backtest_async(
     day, day_start, peak, losses = "", bot.capital, bot.capital, 0
     premium = {a: 0.0 for a in fund}
     cur_time = 0
+    cur_bar: dict[str, Candle] = {}
 
-    async def fill_fn(o: Order) -> Fill:
-        return simulate_fill(o.alias, o.side, o.qty, o.ref_price, cur_time, insts[o.alias].fees)  # type: ignore[arg-type]
+    async def fill_fn(o: Order) -> Optional[Fill]:
+        inst = insts[o.alias]
+        fees = inst.fees
+        if inst.order_type != "limit":
+            return simulate_fill(o.alias, o.side, o.qty, o.ref_price, cur_time, fees)  # type: ignore[arg-type]
+        # 指値は「戦略が見た値段」(前の足の終値) に置き、この足 (= 1 時間) のあいだ待つ。
+        # o.ref_price は執行する足の始値なので、寄りで走った分がそのまま未約定のリスクになる。
+        bar = cur_bar[o.alias]
+        post = hist[o.alias][-1].close if hist[o.alias] else o.ref_price
+        res.limit_orders += 1
+        if limit_filled(o.side, post, bar.low, bar.high):
+            res.limit_maker_fills += 1
+            return simulate_fill(o.alias, o.side, o.qty, post, cur_time, fees, "limit")  # type: ignore[arg-type]
+        if inst.unfilled == "skip":
+            res.limit_skips += 1
+            return None
+        # 待っても来なかったので成行へ落とす (足の終値 = 置いてから 1 時間後の値段)
+        res.limit_fallbacks += 1
+        return simulate_fill(o.alias, o.side, o.qty, bar.close, cur_time, fees)  # type: ignore[arg-type]
 
     async def transfer_fn(t: Transfer) -> bool:
         return True
@@ -157,6 +192,7 @@ async def backtest_async(
         if not res.equity:
             res.equity.append(EquityPoint(t, bot.capital))
         cur_time = t
+        cur_bar = bar
         was_flat = not pf.holdings
 
         # 1. 執行

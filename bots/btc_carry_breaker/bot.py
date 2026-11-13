@@ -42,7 +42,16 @@ def strategy(ctx: Context):
 bot = Bot(
     id="btc_carry_breaker",
     description="BTC キャリー (現物ロング + 先物ショート) + ファンディング回路遮断器",
-    instruments={"spot": spot("BTCUSDT"), "perp": perp("BTC")},
+    instruments={
+        # 現物レッグは国内の登録業者 (GMOコイン)。bitbank のコストも DEFAULT_FEES に入っていて
+        # instruments.spot.venue=bitbank で差し替えられる。どちらにするかは実弾の段で決める
+        # (TRA-50 §1-6 では年率 0.03pt しか違わない)。
+        # 価格・足は Binance の USDT 建てで代用する近似。内外価格差の実測は
+        # tbf/core/instrument.py の Instrument.price_source のコメント (TRA-50 §1-5) を参照。
+        "spot": spot("BTCUSDT", venue="gmo", price_source=("binance", "BTCUSDT"),
+                     order_type="limit", unfilled="market"),
+        "perp": perp("BTC"),
+    },
     timeframe="1h",
     lookback=1,
     capital=10_000,

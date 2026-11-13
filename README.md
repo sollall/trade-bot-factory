@@ -120,9 +120,19 @@ bot = Bot(
 | 共通 | `time` `equity` `cash` `leverage` `neutral_weight()` `params` `state` (実行をまたいで保存される dict) `mode` |
 
 **銘柄**: `spot("ETHUSDT")` (Binance 現物), `perp("ETH")` (Hyperliquid 無期限先物)。
-手数料は取引所ごとの既定値 (基本ティアの taker) で、`spot("ETHUSDT", fees=Fees(0.00075, 3))` のように上書きできます。
+手数料は (取引所, 種類, 銘柄) ごとの既定値で、`spot("ETHUSDT", fees=Fees(0.00075, 3))` のように上書きできます。
 先物の維持証拠金率 `maintenance_margin` (既定 2%) は銘柄の最大レバレッジに合わせて設定してください
 (Hyperliquid は「最大レバレッジの逆数の半分」。最大 5 倍のアルトなら 10%)。
+
+**成行と指値**: `order_type="limit"` にすると指値 (メイカー) で出します。`Fees.maker_rate` が
+その会場の料率で、**マイナスならリベート** (手数料が現金として戻る)。指値は「戦略が判断に使った値段
+(確定足の終値)」に置き、次の足 1 本ぶん待ちます。その間に値段が来なければ `unfilled` の方針に従い、
+`"market"` なら足の終値で成行に落とし、`"skip"` なら見送って次の足で置き直します。
+バックテストの結果には `limit_orders` / `limit_fallbacks` (成行落ち) が出ます。
+
+**価格データの取得元**: `price_source=("binance", "BTCUSDT")` を渡すと、売買の会場と別のところから
+足・価格を取ります。国内業者 (`gmo` / `bitbank`) の板は JPY 建てで `tbf/market/` に取り込みがないため、
+現物レッグはこの形で Binance の USDT 建てを使います (近似の誤差幅は `tbf/core/instrument.py` のコメント)。
 
 **本番 (live) で発注できるのは今は Binance 現物だけ** です。Hyperliquid の先物は paper まで動きます。
 未対応の銘柄を含む bot を `deploy=["live"]` にするとビルド (デプロイ) の時点で止まります。
@@ -273,7 +283,9 @@ npx wrangler d1 migrations apply trade-bot-paper --env paper --local   # ロー�
 
 ## 前提と制約
 
-- 取引所: **Binance 現物** (データ・paper・live) と **Hyperliquid 無期限先物** (データ・paper)。注文は成行。
+- 取引所: **Binance 現物** (データ・paper・live) と **Hyperliquid 無期限先物** (データ・paper)。
+  **GMOコイン / bitbank の現物** はコストモデルと paper の執行だけ (本番発注は未実装)。本番の注文は成行のみで、
+  指値はバックテストと paper でしか通りません。
   マーケットデータは `data-api.binance.vision` / `api.hyperliquid.xyz` (`MARKET_DATA_URL` / `HYPERLIQUID_URL` で変更可)。
   取引所を足すときは `tbf/market/` にデータ取得、`tbf/worker/brokers.py` に発注を実装し、`LIVE_SUPPORTED` に登録します
 - live でも bot ごとの口座は D1 上の仮想口座 (`capital` を割り当て、取引所ごとの現金と持ち高) として管理します。

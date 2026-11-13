@@ -40,11 +40,11 @@ def bots_for_mode(bots: Sequence[Bot], mode: str) -> list[Bot]:
 
 
 async def fetch_prices(bots: Sequence[Bot], rt: Runtime) -> dict[str, dict[str, float]]:
-    """取引所ごとにまとめて現在価格を取る。{venue: {symbol: price}}"""
+    """価格データの取得元ごとにまとめて現在価格を取る。{price_venue: {price_symbol: price}}"""
     want: dict[str, set[str]] = {}
     for b in bots:
         for inst in b.instruments.values():
-            want.setdefault(inst.venue, set()).add(inst.symbol)
+            want.setdefault(inst.price_venue, set()).add(inst.price_symbol)
     out: dict[str, dict[str, float]] = {}
     for venue, symbols in want.items():
         try:
@@ -65,7 +65,7 @@ async def tick(bots: Sequence[Bot], rt: Runtime) -> int:
         try:
             prices = {}
             for alias, inst in bot.instruments.items():
-                px = by_venue.get(inst.venue, {}).get(inst.symbol)
+                px = by_venue.get(inst.price_venue, {}).get(inst.price_symbol)
                 if not px or px <= 0:
                     raise RuntimeError(f"no price for {inst}")
                 prices[alias] = px
@@ -135,7 +135,7 @@ async def run_bot(bot: Bot, prices: dict[str, float], rt: Runtime) -> None:
     for alias in perps:
         inst = bot.instruments[alias]
         since = min(row.last_funding, now - max(bot.lookback * tf, FUNDING_WINDOW_MS))
-        hist = await rt.markets[inst.venue].funding(inst.symbol, since, now)
+        hist = await rt.markets[inst.price_venue].funding(inst.price_symbol, since, now)
         funding[alias] = hist
         for f in hist:
             if f.time > row.last_funding:
@@ -145,7 +145,7 @@ async def run_bot(bot: Bot, prices: dict[str, float], rt: Runtime) -> None:
 
     bars = {}
     for alias, inst in bot.instruments.items():
-        bars[alias] = await rt.markets[inst.venue].recent(inst.symbol, bot.timeframe, bot.lookback, now)
+        bars[alias] = await rt.markets[inst.price_venue].recent(inst.price_symbol, bot.timeframe, bot.lookback, now)
     short = [a for a, cs in bars.items() if len(cs) < bot.lookback]
     if short:
         await store.add_event(bot.id, "warn", f"not enough candles for {short}", now)
@@ -200,6 +200,8 @@ async def rebalance(
                 ref_price=o.ref_price,
                 client_order_id=client_order_id(bot.id, candle if candle is not None else rt.now, seq[0]),
                 now=rt.now,
+                # 指値は戦略が判断に使った終値に置く (バックテストと同じ置き方)
+                limit_price=(bench or {}).get(o.alias),
             )
         )
         if res is None:

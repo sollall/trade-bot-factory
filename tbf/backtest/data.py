@@ -25,18 +25,19 @@ async def load_bot_data(
     bars: dict[str, list[Candle]] = {}
     funding: dict[str, list[FundingPoint]] = {}
     for alias, inst in bot.instruments.items():
-        if inst.venue not in markets:
-            raise ValueError(f"{bot.id}: no market data for venue {inst.venue}")
-        name = f"{inst.venue}_{inst.kind}_{inst.symbol}_{bot.timeframe}_{start}_{end}.json"
+        # 国内業者のように自前の足がない会場は price_source で取得元を差し替える (Instrument のコメント参照)
+        if inst.price_venue not in markets:
+            raise ValueError(f"{bot.id}: no market data for venue {inst.price_venue}")
+        name = f"{inst.price_venue}_{inst.kind}_{inst.price_symbol}_{bot.timeframe}_{start}_{end}.json"
         path = cache_dir / name if cache_dir else None
         if path and path.exists():
             raw = json.loads(path.read_text())
             bars[alias] = [Candle(*c) for c in raw["candles"]]
             funding[alias] = [FundingPoint(*f) for f in raw["funding"]]
             continue
-        m = markets[inst.venue]
-        bars[alias] = await m.history(inst.symbol, bot.timeframe, start, end)
-        funding[alias] = await m.funding(inst.symbol, start, end) if inst.is_perp else []
+        m = markets[inst.price_venue]
+        bars[alias] = await m.history(inst.price_symbol, bot.timeframe, start, end)
+        funding[alias] = await m.funding(inst.price_symbol, start, end) if inst.is_perp else []
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(

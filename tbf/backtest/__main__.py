@@ -9,6 +9,10 @@
       --walk-forward 90:30 --objective sharpe                                     # ウォークフォワード検証
 --param / --sweep のキーは戦略の params か、bot の設定 (leverage, capital, rebalance_band,
 transfer_fee_usd, rebalance_threshold, cash_buffer) のどちらでもよい。
+銘柄の執行の前提も instruments.<別名>.<venue|order_type|unfilled> で差し替えられる:
+  python -m tbf.backtest --bot btc_carry_breaker --days 180 \
+      --sweep instruments.spot.venue=gmo,bitbank --sweep instruments.spot.order_type=limit,market
+会場を変えると手数料はその会場の既定値に引き直される (bot が fees を固定している場合を除く)。
 """
 
 from __future__ import annotations
@@ -51,6 +55,10 @@ def _row(label: str, r: BacktestResult) -> str:
     if s["funding_income"] or s["liquidations"]:
         line += f" FR{s['funding_income']:>9,.0f} 清算{s['liquidations']}"
     line += f" 手数料{s['fees']:>8,.0f} 建玉{pct(s['time_in_market'])}"
+    if s["limit_orders"]:
+        line += f" 指値{s['limit_orders']:>3} 成行落ち{s['limit_fallbacks']:>3} ({pct(s['fallback_rate'])})"
+    if s["limit_skips"]:
+        line += f" 見送り{s['limit_skips']:>3}"
     if s["halted"]:
         line += f" 停止: {s['halted']}"
     return line
