@@ -272,6 +272,21 @@ python -m tbf.arb report    # 集計
 
 設定は `arb.toml`、サーバー設置は `deploy/setup-server.sh`。詳細とセキュリティのチェックリストは [docs/arb.md](docs/arb.md)。
 
+## 国内の薄い板への両側指値 (マーケットメイク, シャドーモード)
+
+bitbank の板が薄いアルト 5 銘柄に指値を両側に出す型が成立するかを、**一切発注せずに**測ります
+(読み取り専用の公開 API だけ。鍵も口座も要りません)。在庫のヘッジは Hyperliquid perp 前提。
+
+```bash
+python -m tbf.jpmaker check              # 設定と公開 API の疎通
+python -m tbf.jpmaker run                # 記録 (1 秒間隔の板 + 約定テープ + ヘッジ先の板)
+python -m tbf.jpmaker report --days 7    # 窓ごとの年率と合否
+```
+
+設定は `jp_maker.toml` (会場・銘柄・サイズ・間隔)。**合否の線・費用・窓の切り方は
+`tbf/jpmaker/declared.py` に凍結してあり、設定ファイルからは動かせません。**
+詳細は [docs/jp-maker.md](docs/jp-maker.md)。
+
 ## 開発
 
 ```bash

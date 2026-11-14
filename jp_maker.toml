@@ -1,0 +1,48 @@
+# TRA-65 国内の薄い板への両側指値 (マーケットメイク) シャドーモードの設定
+#
+# **会場・銘柄・サイズ・ポーリング間隔だけをここで決める。**
+# 合否の線・費用・窓の切り方・逆選択の地平は `tbf/jpmaker/declared.py` に凍結してあり、
+# ここからは動かせない (銘柄とサイズを宣言グリッドから外すと load_config が弾く)。
+#
+# 依頼票は設定の置き場所を data/jp_maker.toml と指定していたが、`data/` は .gitignore 済みで
+# コミットできないため、同リポジトリの他の設定 (arb.toml / funding.toml / carry.toml) と
+# 同じくルートに置いた。--config で任意の位置を指定できる。
+
+# public.bitbank.cc は CloudFront の静的キャッシュで cache-control: max-age=1。
+# 1 秒より速く叩いても同じ中身が返るだけなので 1 秒が下限 (実測 2026-11-14)。
+book_poll_sec = 1.0
+# transactions は最新 60 件しか返さない。対象 5 銘柄は薄く 60 件で 1〜2 時間ぶんあるので 60 秒で十分。
+tape_poll_sec = 60.0
+# Hyperliquid の l2Book は weight 2。5 銘柄 x 12 回/分 = 120 weight/分 (予算 1200)。
+hl_poll_sec = 5.0
+hl_depth_levels = 20
+
+bitbank_public = "https://public.bitbank.cc"
+hyperliquid_info = "https://api.hyperliquid.xyz/info"
+http_timeout_sec = 10.0
+
+# 1 注文あたりの金額 (JPY)。資本 $1,000〜$10,000 の想定で依頼票が指定した 2 通り。
+sizes_jpy = [50000.0, 200000.0]
+
+# 対象 5 銘柄と在庫ヘッジ先の perp。
+# 国内で空売りできる 5 銘柄 (btc/xrp/eth/sol/doge) はスプレッドが 0.001% 以下なので、
+# 在庫のヘッジは Hyperliquid の perp に出すしかない = perp がある銘柄だけが候補 (依頼票 §背景 2-3)。
+[[pairs]]
+pair = "render_jpy"
+hedge_coin = "RENDER"
+
+[[pairs]]
+pair = "gala_jpy"
+hedge_coin = "GALA"
+
+[[pairs]]
+pair = "imx_jpy"
+hedge_coin = "IMX"
+
+[[pairs]]
+pair = "dot_jpy"
+hedge_coin = "DOT"
+
+[[pairs]]
+pair = "op_jpy"
+hedge_coin = "OP"
