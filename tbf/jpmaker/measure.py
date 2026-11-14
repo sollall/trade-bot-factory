@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 from dataclasses import dataclass, field
 
 from tbf.jpmaker import declared, hedge as hedge_mod
@@ -145,10 +146,30 @@ class Cell:
     filled_jpy: float = 0.0
     taker_jpy: float = 0.0
     gross_jpy: float = 0.0
-    adverse_jpy: float = 0.0
+    adverse_sum_jpy: float = 0.0
+    # 約定 1 件ごとの逆選択損の「約定金額に対する比」。中央値の基準を出すために持つ。
+    adverse_ratios: list[float] = field(default_factory=list)
+    # "sum" = 依頼票の式どおり 1 件ずつの合計 (判定に使う)。"median" = 1 件あたりの
+    # 中央値 x 約定金額で置き換えた感度。declared.ADVERSE_BASIS_FOR_NET が既定。
+    adverse_basis: str = declared.ADVERSE_BASIS_FOR_NET
     hedge_jpy: float = 0.0
     measured_sec: float = 0.0
     n_pairs: int = 1
+
+    @property
+    def adverse_median_ratio(self) -> float | None:
+        if not self.adverse_ratios:
+            return None
+        return statistics.median(self.adverse_ratios)
+
+    @property
+    def adverse_jpy(self) -> float:
+        if self.adverse_basis == "median":
+            r = self.adverse_median_ratio
+            return 0.0 if r is None else r * self.filled_jpy
+        if self.adverse_basis != "sum":
+            raise ValueError(f"unknown adverse basis: {self.adverse_basis}")
+        return self.adverse_sum_jpy
 
     @property
     def net_jpy(self) -> float:
@@ -180,7 +201,9 @@ def _collect(cell: Cell, econs: list[FillEcon], ws: int, we: int) -> None:
         cell.n_measured += 1
         cell.filled_jpy += e.fill.notional_jpy
         cell.gross_jpy += e.gross_jpy
-        cell.adverse_jpy += e.adverse_jpy or 0.0
+        cell.adverse_sum_jpy += e.adverse_jpy or 0.0
+        if e.fill.notional_jpy > 0 and e.adverse_jpy is not None:
+            cell.adverse_ratios.append(e.adverse_jpy / e.fill.notional_jpy)
         cell.hedge_jpy += e.hedge_jpy or 0.0
 
 
@@ -212,12 +235,24 @@ def run_all(data: dict[str, PairData], since: int, until: int, poll_sec: float, 
     return m
 
 
-def cells_for_window(m: Measurement, ws: int, we: int, size: float, mode: str) -> tuple[dict[str, Cell], Cell]:
-    """その窓の銘柄ごとの集計と、宣言グリッド (5 銘柄) 合計"""
+def cells_for_window(
+    m: Measurement,
+    ws: int,
+    we: int,
+    size: float,
+    mode: str,
+    adverse_basis: str = declared.ADVERSE_BASIS_FOR_NET,
+) -> tuple[dict[str, Cell], Cell]:
+    """その窓の銘柄ごとの集計と、宣言グリッド (5 銘柄) 合計
+
+    `adverse_basis` は逆選択損を 1 件ずつの合計で見るか (="sum"、判定に使う基準)、
+    1 件あたりの中央値で置き換えるか (="median"、感度) の切り替え。中央値はその窓の
+    その集計単位に入った約定だけから取る (ALL 行は 5 銘柄の約定を混ぜた中央値)。
+    """
     per_pair: dict[str, Cell] = {}
     for pair, d in m.data.items():
         cov, _ = coverage(d.times, ws, we, m.poll_sec)
-        c = Cell(scope=pair, size_jpy=size, mode=mode, n_pairs=1)
+        c = Cell(scope=pair, size_jpy=size, mode=mode, n_pairs=1, adverse_basis=adverse_basis)
         c.measured_sec = (we - ws) / 1000.0 * cov
         for side in ("buy", "sell"):
             key = (pair, side, size, mode)
@@ -225,14 +260,15 @@ def cells_for_window(m: Measurement, ws: int, we: int, size: float, mode: str) -
             res = m.sims[key]
             c.taker_jpy += getattr(res, "taker_notional_jpy", 0.0)
         per_pair[pair] = c
-    total = Cell(scope="ALL", size_jpy=size, mode=mode, n_pairs=len(m.data))
+    total = Cell(scope="ALL", size_jpy=size, mode=mode, n_pairs=len(m.data), adverse_basis=adverse_basis)
     covs = []
     for pair, c in per_pair.items():
         total.n_fills += c.n_fills
         total.n_measured += c.n_measured
         total.filled_jpy += c.filled_jpy
         total.gross_jpy += c.gross_jpy
-        total.adverse_jpy += c.adverse_jpy
+        total.adverse_sum_jpy += c.adverse_sum_jpy
+        total.adverse_ratios.extend(c.adverse_ratios)
         total.hedge_jpy += c.hedge_jpy
         total.taker_jpy += c.taker_jpy
         covs.append(c.measured_sec / ((we - ws) / 1000.0) if we > ws else 0.0)

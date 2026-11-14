@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import statistics
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,26 @@ from tbf.jpmaker import declared
 from tbf.jpmaker.collect import Collector
 from tbf.jpmaker.config import load_config
 from tbf.jpmaker.hedge import HlSample, hedge_cost, slippage_ratio, walk_levels
-from tbf.jpmaker.measure import Cell, PairData, economics, load, run_all, window_bounds
-from tbf.jpmaker.report import build_report, walkforward
+from tbf.jpmaker.measure import (
+    Cell,
+    FillEcon,
+    Measurement,
+    PairData,
+    economics,
+    load,
+    run_all,
+    window_bounds,
+)
+from tbf.jpmaker.report import (
+    adverse_ratios,
+    build_report,
+    cut_verdicts,
+    overall_verdict,
+    section_adverse_basis_flip,
+    section_adverse_distribution,
+    section_verdict,
+    walkforward,
+)
 from tbf.jpmaker.sim import (
     BookSample,
     Fill,
@@ -262,6 +281,115 @@ def test_stability_rule_counts_windows_below_floor():
     assert declared.PASS_APY == pytest.approx(declared.FLOOR_APY * 3)
 
 
+# --- 逆選択を平均で見るか中央値で見るか (リーダー指示で足した報告項目) ---
+def test_adverse_basis_sum_is_mean_and_median_ignores_one_outlier():
+    """1 件の外れ値が合計 (= 平均) を動かし、中央値は動かないこと
+
+    社内の実例と同じ形: Lido の `apr/sma` は日次 7 点のうち 1 点 (15.077%) に平均を
+    押し上げられて 4.242% を返すが、中位は 2.27%。
+    """
+    cell = Cell(scope="p", size_jpy=50_000.0, mode="conservative", n_pairs=1)
+    cell.measured_sec = 86_400.0
+    cell.n_measured = 10
+    cell.filled_jpy = 500_000.0
+    cell.gross_jpy = 1_050.0
+    cell.hedge_jpy = 450.0
+    # 1 bp の約定が 9 件と、500 bp の外れ値が 1 件
+    cell.adverse_ratios = [0.0001] * 9 + [0.05]
+    cell.adverse_sum_jpy = sum(r * 50_000.0 for r in cell.adverse_ratios)
+
+    cell.adverse_basis = "sum"
+    assert cell.adverse_jpy == pytest.approx(45.0 + 2_500.0)
+    assert cell.net_jpy == pytest.approx(1_050.0 - 450.0 - 2_545.0)
+    assert cell.apy < declared.FLOOR_APY  # 外れ値 1 件で床を割る
+
+    cell.adverse_basis = "median"
+    assert cell.adverse_median_ratio == pytest.approx(0.0001)
+    assert cell.adverse_jpy == pytest.approx(0.0001 * 500_000.0)  # = 50 円
+    assert cell.net_jpy == pytest.approx(1_050.0 - 450.0 - 50.0)
+    assert cell.apy > declared.PASS_APY  # 中央値で見ると線を越える
+
+    # 既定は宣言した基準 (= 合計)。判定の基準を暗黙に中央値へ替えないこと
+    assert declared.ADVERSE_BASIS_FOR_NET == "sum"
+    assert Cell(scope="p", size_jpy=50_000.0, mode="conservative").adverse_basis == "sum"
+    with pytest.raises(ValueError):
+        Cell(scope="p", size_jpy=50_000.0, mode="conservative", adverse_basis="p90").adverse_jpy
+
+
+def _measurement_with_outlier_fills(n_windows: int = 3) -> Measurement:
+    """窓ごとに「1 bp の約定 9 件 + 500 bp の外れ値 1 件」を置いた計測を組む
+
+    板の標本は 1 時間おき (poll_sec も 1 時間) にしてカバレッジを 100% にしている。
+    この固定物が確かめるのは**逆選択の基準の算術と合否の比較**で、約定の組み立てや
+    標本間隔そのものは別のテストで固定している。
+    """
+    day = 86_400_000
+    since = (T0 // day) * day
+    until = since + n_windows * day
+    pair = "render_jpy"
+    data = PairData(pair=pair)
+    data.samples = [BookSample(t, 99.0, 100.0, 101.0, 100.0) for t in range(since, until, 3_600_000)]
+
+    m = Measurement(since=since, until=until, poll_sec=3_600.0, delay_ms=1_250.0, data={pair: data})
+    for size in declared.SIZES_JPY:
+        for side in ("buy", "sell"):
+            for mode in declared.FILL_MODES:
+                key = (pair, side, size, mode)
+                m.sims[key] = type("S", (), {"taker_notional_jpy": 0.0, "fills": [], "filled_notional_jpy": 0.0})()
+                m.econs[key] = []
+    # 約定は買い側だけに置く (売り側は空)。1 件 5 万円 x 10 件 = 窓あたり 50 万円
+    for w in range(n_windows):
+        base = since + w * day + 3_600_000
+        ratios = [0.0001] * 9 + [0.05]
+        for i, r in enumerate(ratios):
+            fill = Fill(base + i * 1000, pair, "buy", 99.81, 50_000.0, 100.0, "conservative")
+            econ = FillEcon(
+                fill=fill,
+                half_spread=0.0019,
+                adverse={h: r * 50_000.0 for h in declared.ADVERSE_HORIZONS_SEC},
+                hedge={"cost_ratio": 0.0009, "slippage": 0.0, "drift": 0.0, "used_delay_ms": 1_250.0},
+            )
+            for size in declared.SIZES_JPY:
+                m.econs[(pair, "buy", size, "conservative")].append(econ)
+    return m
+
+
+def test_report_states_which_basis_flips_the_verdict():
+    m = _measurement_with_outlier_fills()
+
+    sum_cuts = cut_verdicts(m, "sum")
+    med_cuts = cut_verdicts(m, "median")
+    # 外れ値を含む合計では全部の切り方で不合格、中央値では全部合格 = 全部反転する
+    assert [c.passed for c in sum_cuts] == [False] * 4
+    assert [c.passed for c in med_cuts] == [True] * 4
+    assert overall_verdict(sum_cuts) is False and overall_verdict(med_cuts) is True
+
+    # 既定 (= 宣言した基準) は合計側。報告する合否が中央値に差し替わらないこと
+    assert [c.passed for c in cut_verdicts(m)] == [c.passed for c in sum_cuts]
+    assert "**不合格**" in section_verdict(m)
+
+    text = section_adverse_basis_flip(m)
+    assert "**反転する**" in text
+    assert "どちらを使うかで総合の合否が反転する" in text
+    assert "報告する合否は宣言どおり平均基準 (不合格) の方" in text
+    for c in declared.SIZES_JPY:
+        assert f"{c / 10_000:.0f}万 / 1日窓" in text
+
+
+def test_adverse_distribution_reports_both_median_and_mean():
+    m = _measurement_with_outlier_fills(n_windows=1)
+    h = declared.ADVERSE_HORIZON_FOR_NET_SEC
+    rs = adverse_ratios(m, "render_jpy", 50_000.0, h)
+    assert len(rs) == 10
+    assert statistics.median(rs) == pytest.approx(0.0001)
+    assert statistics.fmean(rs) == pytest.approx((0.0001 * 9 + 0.05) / 10)
+
+    text = section_adverse_distribution(m)
+    assert "平均" in text and "中央値" in text and "平均/中央値" in text
+    # 1 bp と 500 bp の両方が行に出ている (中央値だけを報告しない)
+    assert "   1.0" in text and " 500.0" in text
+
+
 # --- 設定が宣言グリッドを動かせないこと ---
 def test_config_rejects_grid_changes(tmp_path):
     base = (ROOT / "jp_maker.toml").read_text()
@@ -420,8 +548,11 @@ def test_report_runs_end_to_end(tmp_path):
     # 2 日目以降は「前の窓で選んだ銘柄」の OOS も出る
     assert any(r.prev_best_pair for r in rows)
     text = build_report(store, m)
-    for marker in ("== 1.", "== 2.", "== 3.", "== 4.", "== 5.", "== 6.", "== 7."):
+    for marker in ("== 1.", "== 2.", "== 3.", "== 3-b.", "== 3-c.", "== 4.", "== 5.", "== 6.", "== 7."):
         assert marker in text
     # 判定まで到達していること (合格 / 不合格 のどちらかが書かれる)
-    assert "**合格**" in text or "**不合格**" in text
-    assert "判定不能" not in text
+    verdict = section_verdict(m)
+    assert "**合格**" in verdict or "**不合格**" in verdict
+    assert "判定不能" not in verdict
+    # 逆選択の基準の比較も出ること (切り方ごとに窓が足りなければその行は判定不能と書く)
+    assert "総合: 平均基準" in text

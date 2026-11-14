@@ -112,6 +112,154 @@ def section_adverse(m: Measurement) -> str:
     return "\n".join(out)
 
 
+def adverse_ratios(m: Measurement, pair: str, size: float, horizon: int, mode: str | None = None) -> list[float]:
+    """約定 1 件ごとの逆選択損 / 約定金額 (未測定の件は入れない)"""
+    mode = mode or declared.DECISION_MODE
+    out = []
+    for side in ("buy", "sell"):
+        for e in m.econs[(pair, side, size, mode)]:
+            v = e.adverse.get(horizon)
+            if v is not None and e.fill.notional_jpy > 0:
+                out.append(v / e.fill.notional_jpy)
+    return out
+
+
+# --- 3-b. 逆選択の分布 (中央値と平均の両方。リーダー指示) ---
+def section_adverse_distribution(m: Measurement) -> str:
+    h = declared.ADVERSE_HORIZON_FOR_NET_SEC
+    out = [
+        f"== 3-b. 逆選択の分布 (約定 1 件あたり、{h} 秒。正 = 損。単位 bps)",
+        "   **中央値と平均の両方を出す。** 逆選択損は裾の長い量で、1 件の外れ値が平均を動かす。",
+        "   式に入るのは Σ(1 件ずつ) = 件数で見れば平均の基準 (事前宣言どおり。変えていない)。",
+        "   最後の列は「平均 / 中央値」。これが 1 から大きく外れている行は 1 件の外れ値に引かれている。",
+    ]
+    out.append("銘柄        サイズ   件数     平均    中央値      p90      最大      最小   金額重み平均  平均/中央値")
+    for pair in m.data:
+        for size in declared.SIZES_JPY:
+            rs = adverse_ratios(m, pair, size, h)
+            if not rs:
+                out.append(f"{pair:<11} {size / 10_000:>5.0f}万   (測れた約定なし)")
+                continue
+            mean = statistics.fmean(rs)
+            med = statistics.median(rs)
+            wsum = 0.0
+            wden = 0.0
+            for side in ("buy", "sell"):
+                for e in m.econs[(pair, side, size, declared.DECISION_MODE)]:
+                    v = e.adverse.get(h)
+                    if v is not None:
+                        wsum += v
+                        wden += e.fill.notional_jpy
+            wmean = wsum / wden if wden > 0 else None
+            ratio = mean / med if med != 0.0 else None
+            out.append(
+                f"{pair:<11} {size / 10_000:>5.0f}万 {len(rs):>6} {_bps(mean)} {_bps(med)} "
+                f"{_bps(percentile(rs, 0.9))} {_bps(max(rs))} {_bps(min(rs))}   {_bps(wmean)}  "
+                f"{('   n/a' if ratio is None else f'{ratio:6.2f}')}"
+            )
+    # 宣言グリッド全体 (5 銘柄・2 サイズをまとめた分布)
+    allr = [r for pair in m.data for size in declared.SIZES_JPY for r in adverse_ratios(m, pair, size, h)]
+    if allr:
+        mean, med = statistics.fmean(allr), statistics.median(allr)
+        out.append(
+            f"{'ALL':<11} {'両サイズ':>6} {len(allr):>5} {_bps(mean)} {_bps(med)} "
+            f"{_bps(percentile(allr, 0.9))} {_bps(max(allr))} {_bps(min(allr))}"
+        )
+        if len(allr) >= 3:
+            out.append(
+                f"   外れ値の効き: 最大の 1 件を除くと平均 {_bps(statistics.fmean(sorted(allr)[:-1]))}"
+                f" (全件 {_bps(mean)}、中央値 {_bps(med)})"
+            )
+    return "\n".join(out)
+
+
+@dataclass
+class CutVerdict:
+    """1 つの切り方 (サイズ x 窓幅) の判定結果"""
+
+    size: float
+    days: float
+    n_usable: int
+    n_rows: int
+    median_apy: float | None
+    below_floor: int
+    passed: bool | None  # None = 判定可能な窓が無い
+
+    @property
+    def label(self) -> str:
+        return f"{self.size / 10_000:.0f}万 / {self.days:.0f}日窓"
+
+    @property
+    def below_ratio(self) -> float | None:
+        return self.below_floor / self.n_usable if self.n_usable else None
+
+
+def cut_verdicts(m: Measurement, adverse_basis: str = declared.ADVERSE_BASIS_FOR_NET) -> list[CutVerdict]:
+    """宣言した 4 通りの切り方それぞれの合否。`adverse_basis` で逆選択の基準を切り替える"""
+    out = []
+    for size in declared.SIZES_JPY:
+        for days in declared.WALK_WINDOW_DAYS:
+            rows = [r for r in walkforward(m, size, days, adverse_basis=adverse_basis) if r.usable]
+            if not rows:
+                out.append(CutVerdict(size, days, 0, 0, None, 0, None))
+                continue
+            apys = [r.declared_apy for r in rows]
+            med = statistics.median(apys)
+            below = sum(1 for a in apys if a < declared.FLOOR_APY)
+            passed = med >= declared.PASS_APY and below / len(rows) <= declared.MAX_BELOW_FLOOR_RATIO
+            out.append(CutVerdict(size, days, len(rows), len(rows), med, below, passed))
+    return out
+
+
+def overall_verdict(cuts: list[CutVerdict]) -> bool | None:
+    """全部の切り方で線を満たしたときだけ合格。判定可能な切り方が無ければ None"""
+    decided = [c.passed for c in cuts if c.passed is not None]
+    return all(decided) if decided else None
+
+
+def section_adverse_basis_flip(m: Measurement) -> str:
+    """中央値と平均のどちらを使うと合否が反転するか (リーダー指示で追加した報告項目)"""
+    out = [
+        "== 3-c. 逆選択を平均で見るか中央値で見るかで合否が反転するか",
+        f"   判定の基準は事前宣言のまま **{declared.ADVERSE_BASIS_FOR_NET}** "
+        "(= Σ 1 件ずつ、件数で見れば平均)。下の median 列は感度であって判定ではない。",
+        "切り方          平均基準の年率  合否   中央値基準の年率  合否   反転するか",
+    ]
+    by_basis = {b: cut_verdicts(m, b) for b in declared.ADVERSE_BASES}
+    flips = []
+    for i, c in enumerate(by_basis["sum"]):
+        d = by_basis["median"][i]
+        if c.passed is None and d.passed is None:
+            verdict_cmp = "判定不能"
+        elif c.passed == d.passed:
+            verdict_cmp = "反転しない"
+        else:
+            verdict_cmp = f"**反転する** ({_v(c.passed)} -> {_v(d.passed)})"
+            flips.append(c.label)
+        out.append(
+            f"{c.label:<14} {_pct(c.median_apy)}  {_v(c.passed):<6} {_pct(d.median_apy)}  {_v(d.passed):<6} {verdict_cmp}"
+        )
+    a, b = overall_verdict(by_basis["sum"]), overall_verdict(by_basis["median"])
+    out.append("")
+    out.append(f"総合: 平均基準 **{_v(a)}** / 中央値基準 **{_v(b)}**")
+    if a is None and b is None:
+        out.append("どちらの基準でも判定可能な窓が無い (= まだ比較できない。測れていないだけ)。")
+    elif a == b:
+        out.append("どちらを使っても総合の合否は変わらない。")
+    else:
+        out.append(
+            f"**どちらを使うかで総合の合否が反転する。** 平均基準で {_v(a)}、中央値基準で {_v(b)}。"
+            f"報告する合否は宣言どおり平均基準 ({_v(a)}) の方。"
+        )
+    if flips:
+        out.append(f"切り方ごとに反転したもの: {', '.join(flips)}")
+    return "\n".join(out)
+
+
+def _v(passed: bool | None) -> str:
+    return "判定不能" if passed is None else ("合格" if passed else "不合格")
+
+
 # --- 4. 在庫ヘッジの実コスト ---
 def section_hedge(m: Measurement) -> str:
     out = [
@@ -244,12 +392,18 @@ class WindowRow:
         return self.declared_apy / self.best_apy
 
 
-def walkforward(m: Measurement, size: float, days: float, mode: str | None = None) -> list[WindowRow]:
+def walkforward(
+    m: Measurement,
+    size: float,
+    days: float,
+    mode: str | None = None,
+    adverse_basis: str = declared.ADVERSE_BASIS_FOR_NET,
+) -> list[WindowRow]:
     mode = mode or declared.DECISION_MODE
     rows: list[WindowRow] = []
     prev_best: str | None = None
     for ws, we in window_bounds(m.since, m.until, days):
-        per_pair, total = cells_for_window(m, ws, we, size, mode)
+        per_pair, total = cells_for_window(m, ws, we, size, mode, adverse_basis)
         cov = total.measured_sec / ((we - ws) / 1000.0) if we > ws else 0.0
         scored = [(p, c.apy) for p, c in per_pair.items() if c.apy is not None]
         best_pair, best_apy = max(scored, key=lambda x: x[1]) if scored else ("-", None)
@@ -323,37 +477,33 @@ def section_verdict(m: Measurement) -> str:
         f"   3. 安定性: 床を割る窓が {declared.MAX_BELOW_FLOOR_RATIO * 100:.0f}% を超えたら不合格",
         "",
     ]
-    verdicts = []
-    for size in declared.SIZES_JPY:
-        for days in declared.WALK_WINDOW_DAYS:
-            rows = [r for r in walkforward(m, size, days) if r.usable]
-            if not rows:
-                out.append(f"{size / 10_000:.0f}万 / {days:.0f}日窓: 判定可能な窓が無い (未測定)")
-                verdicts.append(None)
-                continue
-            apys = [r.declared_apy for r in rows]
-            med = statistics.median(apys)
-            below = sum(1 for a in apys if a < declared.FLOOR_APY)
-            ratio = below / len(rows)
-            pass_level = med >= declared.PASS_APY
-            pass_stab = ratio <= declared.MAX_BELOW_FLOOR_RATIO
-            ok = pass_level and pass_stab
-            verdicts.append(ok)
-            out.append(
-                f"{size / 10_000:.0f}万 / {days:.0f}日窓: 窓中央値 {med * 100:+.2f}%  床割れ {below}/{len(rows)} "
-                f"({ratio * 100:.0f}%)  -> 水準 {'満たす' if pass_level else '満たさない'} / "
-                f"安定性 {'満たす' if pass_stab else '満たさない'} -> **{'合格' if ok else '不合格'}**"
-            )
-    decided = [v for v in verdicts if v is not None]
-    if not decided:
+    cuts = cut_verdicts(m, declared.ADVERSE_BASIS_FOR_NET)
+    for c in cuts:
+        if c.passed is None:
+            out.append(f"{c.label}: 判定可能な窓が無い (未測定)")
+            continue
+        pass_level = c.median_apy is not None and c.median_apy >= declared.PASS_APY
+        pass_stab = (c.below_ratio or 0.0) <= declared.MAX_BELOW_FLOOR_RATIO
+        out.append(
+            f"{c.label}: 窓中央値 {c.median_apy * 100:+.2f}%  床割れ {c.below_floor}/{c.n_usable} "
+            f"({(c.below_ratio or 0.0) * 100:.0f}%)  -> 水準 {'満たす' if pass_level else '満たさない'} / "
+            f"安定性 {'満たす' if pass_stab else '満たさない'} -> **{_v(c.passed)}**"
+        )
+    decided = [c.passed for c in cuts if c.passed is not None]
+    overall = overall_verdict(cuts)
+    if overall is None:
         out.append("\n**判定不能** (測れた窓が無い)")
-    elif all(decided):
+    elif overall:
         out.append("\n**合格** (宣言した 4 通りの切り方すべてで線を満たした)")
     else:
         out.append(
             f"\n**不合格** ({len(decided) - sum(1 for v in decided if v)} / {len(decided)} の切り方で線を満たさなかった)。"
             "低く出たことを理由に線は動かしていない。"
         )
+    out.append(
+        "逆選択を中央値で見た場合に合否が反転するかは 3-c に出す "
+        f"(判定の基準は宣言どおり {declared.ADVERSE_BASIS_FOR_NET})。"
+    )
     return "\n".join(out)
 
 
@@ -375,6 +525,8 @@ def build_report(store: JpMakerStore, m: Measurement) -> str:
             section_residency(m),
             section_fills(m),
             section_adverse(m),
+            section_adverse_distribution(m),
+            section_adverse_basis_flip(m),
             section_hedge(m),
             section_uptime(store, m),
         ]
