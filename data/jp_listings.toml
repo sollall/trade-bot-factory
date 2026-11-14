@@ -1,0 +1,1122 @@
+# 国内暗号資産交換業者の「新規取扱のお知らせ」発表履歴 (TRA-66)
+#
+# 全項目、各社の公告ページ／プレスリリース（一次情報）を 2026-11-14 に実際に取得して確認した値のみを記載する。
+# 確認できなかった項目は「キーを省略」し、report 側に unknown とその理由を書く。
+# 二次情報（まとめ記事等）由来の値はこのファイルには入れない。
+#
+# 対象期間: 2024-11-14 〜 2026-11-14 (直近24ヶ月)
+# 対象業者: bitbank / GMOコイン / bitFlyer / Coincheck / SBI VCトレード / BITPOINT
+#   OKCoinJapan: 取得不能 (robots.txt が ClaudeBot 等に対し Disallow: /。公告パスは許可リスト外)
+#   DMM Bitcoin: 取得不能 (事業終了。bitcoin.dmm.com 接続不能。口座・資産はSBI VCトレードへ移管)
+#
+# announce_utc は「分単位まで一次情報で確定できた発表時刻」のみ記載する。
+#   time_precision = "second" … 発表時刻が秒単位で取得できた (bitbank: microCMS publishedAt /
+#                               Coincheck: STUDIO publishedAt / GMO: 公式RSS pubDate)
+#   time_precision = "hour"   … 時までしか取得できなかった (announce_jst_hour に記載)
+#   time_precision = "date"   … 日付のみ (announce_date_jst に記載)
+#
+# kind = "new_listing"      … その業者で新たに取扱う銘柄の発表
+#        "migration"        … 既に取扱中の銘柄のトークン移行・改称 (RNDR→RENDER, MKR→SKY, LSKチェーン移行)
+#        "new_service_type" … 既に取扱中の銘柄への取引種類追加 (板取引・信用取引の追加)
+#
+# first_in_jp は「国内初上場かどうか」。発表文に「国内初」「日本初」の明示がある場合、
+#   および他の国内業者の取扱銘柄一覧に当該時点で存在しないことを確認できた場合に true。
+#
+# ref = 海外の参照市場。"binance" は現物 USDT ペア、"hyperliquid" は perp。
+#   ref を省略している銘柄は海外参照市場が存在せず価格反応を測れない (no_ref_reason 参照)。
+
+[[announcements]]
+id = "bb-2024-11-19-SOL-CYBER"
+venue = "bitbank"
+kind = "new_listing"
+title = "【予告】ソラナ（SOL）、サイバー（CYBER）の取扱い開始のお知らせ"
+announce_utc = "2024-11-19T03:00:05Z"
+time_precision = "second"
+start_date_jst = "2024-11-21"
+start_utc = "2024-11-21T03:00:00Z"
+start_precision = "minute"
+start_note = "予告本文の提供開始表（12:00〜 新規上場モード／14:00〜 成行・販売所）より 12:00 JST を採用"
+listing_type = "取引所（板）＋販売所＋貸して増やす"
+source_url = "https://bitbank.cc/blog/articles/790023809"
+
+  [[announcements.assets]]
+  ticker = "SOL"
+  name_ja = "ソラナ"
+  chain = "Solana"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SOLUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = -0.052093   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.003894
+
+  [[announcements.assets]]
+  ticker = "CYBER"
+  name_ja = "サイバー"
+  chain = "OP Mainnet"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "CYBERUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = -0.07164   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.005939
+
+[[announcements]]
+id = "bb-2024-12-03-RENDER"
+venue = "bitbank"
+kind = "migration"
+title = "【再予告】レンダー（RENDER）の取扱い開始のお知らせ（RNDR→RENDER 移行）"
+announce_utc = "2024-12-03T06:13:45Z"
+time_precision = "second"
+start_date_jst = "2024-12-11"
+start_precision = "date"
+listing_type = "取引所（板）＋販売所"
+source_url = "https://bitbank.cc/blog/articles/197102182"
+is_migration = true
+note = "RNDR(Ethereum)からRENDER(Solana)へのトークン移行。新規資産ではない。当初予告は2024-11-27（延期記事本文「昨日お知らせいたしました」より）だが当該記事は公告一覧から取得不能＝unknown"
+
+  [[announcements.assets]]
+  ticker = "RENDER"
+  name_ja = "レンダー"
+  chain = "Solana"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "RENDERUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = -0.041209   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.084077
+
+[[announcements]]
+id = "bb-2025-01-31-TRX"
+venue = "bitbank"
+kind = "new_listing"
+title = "【再予告】トロン（TRX）の取扱い開始のお知らせ"
+announce_utc = "2025-01-31T03:00:05Z"
+time_precision = "second"
+start_date_jst = "2025-02-03"
+start_precision = "date"
+listing_type = "取引所（板）＋販売所＋貸して増やす"
+source_url = "https://bitbank.cc/blog/articles/615327154"
+note = "当初予告（2025-01-27 14:00 JST 開始予定）は同日13:30に延期。当初予告記事は公告一覧から取得不能＝unknown。ここで測るのは「再予告」の発表。"
+
+  [[announcements.assets]]
+  ticker = "TRX"
+  name_ja = "トロン"
+  chain = "Tron"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "TRXUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.026216   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.041609
+
+[[announcements]]
+id = "bb-2025-02-28-LPT"
+venue = "bitbank"
+kind = "new_listing"
+title = "【予告】ライブピア（LPT）の取扱い開始のお知らせ"
+announce_utc = "2025-02-28T03:00:05Z"
+time_precision = "second"
+start_date_jst = "2025-03-04"
+start_precision = "date"
+listing_type = "取引所（板）＋販売所"
+source_url = "https://bitbank.cc/blog/articles/234926644"
+
+  [[announcements.assets]]
+  ticker = "LPT"
+  name_ja = "ライブピア"
+  chain = "Arbitrum/Ethereum"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "LPTUSDT"
+  hyperliquid_perp = false
+  measured_main_excess_net = -0.04273   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.023099
+
+[[announcements]]
+id = "bb-2025-05-09-ATOM"
+venue = "bitbank"
+kind = "new_listing"
+title = "【予告】コスモス（ATOM）の取扱い開始のお知らせ"
+announce_utc = "2025-05-09T03:00:05Z"
+time_precision = "second"
+start_date_jst = "2025-05-13"
+start_precision = "date"
+listing_type = "取引所（板）＋販売所"
+source_url = "https://bitbank.cc/blog/articles/547384416"
+
+  [[announcements.assets]]
+  ticker = "ATOM"
+  name_ja = "コスモス"
+  chain = "Cosmos"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "ATOMUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.057341   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.04001
+
+[[announcements]]
+id = "bb-2025-08-08-SUI"
+venue = "bitbank"
+kind = "new_listing"
+title = "【予告】スイ（SUI）の取扱い開始のお知らせ"
+announce_utc = "2025-08-08T06:00:04Z"
+time_precision = "second"
+start_date_jst = "2025-08-14"
+start_precision = "date"
+listing_type = "取引所（板）＋販売所"
+source_url = "https://bitbank.cc/blog/articles/180660873"
+
+  [[announcements.assets]]
+  ticker = "SUI"
+  name_ja = "スイ"
+  chain = "Sui"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SUIUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.032047   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.069198
+
+[[announcements]]
+id = "bb-2025-09-11-SKY"
+venue = "bitbank"
+kind = "migration"
+title = "【予告】MKRの取扱廃止およびSKYへの移行に関するお知らせ"
+announce_utc = "2025-09-11T08:56:15Z"
+time_precision = "second"
+start_date_jst = "2025-09-18"
+start_precision = "date"
+listing_type = "取引所（板）＋販売所"
+source_url = "https://bitbank.cc/blog/articles/647148499"
+is_migration = true
+note = "MKR→SKY のトークン移行。新規資産ではない。"
+
+  [[announcements.assets]]
+  ticker = "SKY"
+  name_ja = "スカイ"
+  chain = "Ethereum"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "SKYUSDT"
+  hyperliquid_perp = true
+  measured = false   # coverage<90%; no_trades_T..T+15m
+
+[[announcements]]
+id = "bb-2025-04-11-DOGESOL-margin"
+venue = "bitbank"
+kind = "new_service_type"
+title = "信用取引におけるDOGE・SOLの取扱い開始のお知らせ"
+announce_utc = "2025-04-11T03:00:05Z"
+time_precision = "second"
+start_date_jst = "2025-04-14"
+start_precision = "date"
+listing_type = "信用取引（レバレッジ）"
+source_url = "https://bitbank.cc/blog/articles/763325546"
+note = "既に現物で取扱済の銘柄に対する取引種類の追加。新規取扱ではない。"
+
+  [[announcements.assets]]
+  ticker = "DOGE"
+  name_ja = "ドージコイン"
+  chain = "Dogecoin"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "DOGEUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = -0.021454   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.018647
+
+  [[announcements.assets]]
+  ticker = "SOL"
+  name_ja = "ソラナ"
+  chain = "Solana"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SOLUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.011024   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.000538
+
+[[announcements]]
+id = "cc-2024-12-09-BC"
+venue = "Coincheck"
+kind = "new_listing"
+title = "Coincheck販売所におけるブラッドクリスタル（BC）取扱い開始のお知らせ"
+announce_utc = "2024-12-09T08:00:08Z"
+time_precision = "second"
+start_date_jst = "2024-12-12"
+start_precision = "date"
+listing_type = "販売所のみ"
+source_url = "https://corporate.coincheck.com/news/SE1yBt1k"
+
+  [[announcements.assets]]
+  ticker = "BC"
+  name_ja = "ブラッドクリスタル"
+  first_in_jp = true
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない（exchangeInfo/メタに該当なし）"
+
+[[announcements]]
+id = "cc-2025-01-15-DOGE"
+venue = "Coincheck"
+kind = "new_listing"
+title = "Coincheck、ドージコイン（DOGE）取扱い開始のお知らせ（販売所）"
+announce_utc = "2025-01-15T05:31:46Z"
+time_precision = "second"
+start_date_jst = "2025-01-15"
+start_precision = "date"
+listing_type = "販売所のみ"
+source_url = "https://corporate.coincheck.com/news/GrSm0knj"
+
+  [[announcements.assets]]
+  ticker = "DOGE"
+  name_ja = "ドージコイン"
+  chain = "Dogecoin"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "DOGEUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.017697   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.026834
+
+[[announcements]]
+id = "cc-2025-01-20-DOGE-exch"
+venue = "Coincheck"
+kind = "new_service_type"
+title = "Coincheck取引所におけるドージコイン（DOGE）取扱い開始のお知らせ"
+announce_utc = "2025-01-20T02:01:12Z"
+time_precision = "second"
+start_date_jst = "2025-01-20"
+start_precision = "date"
+listing_type = "取引所（板）"
+source_url = "https://corporate.coincheck.com/news/4JTQ6eiY"
+note = "同社で既に販売所で取扱中の銘柄に板取引を追加。新規取扱ではない。"
+
+  [[announcements.assets]]
+  ticker = "DOGE"
+  name_ja = "ドージコイン"
+  chain = "Dogecoin"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "DOGEUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = -0.050925   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.091469
+
+[[announcements]]
+id = "cc-2025-04-07-LSK"
+venue = "Coincheck"
+kind = "migration"
+title = "旧Liskチェーンのリスク（LSK）の取扱い廃止、並びにEthereumチェーンのリスク（LSK）の付与および取扱い開始のお知らせ"
+announce_utc = "2025-04-07T03:03:01Z"
+time_precision = "second"
+listing_type = "販売所／取引所"
+source_url = "https://corporate.coincheck.com/news/t-YYA9_1"
+is_migration = true
+note = "LSKのチェーン移行。新規資産ではない。"
+
+  [[announcements.assets]]
+  ticker = "LSK"
+  name_ja = "リスク"
+  chain = "Ethereum"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "LSKUSDT"
+  hyperliquid_perp = false
+  measured_main_excess_net = -0.006947   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.048713
+
+[[announcements]]
+id = "cc-2025-04-25-PEPE-MASK-MANA-GRT"
+venue = "Coincheck"
+kind = "new_listing"
+title = "PEPE・MASK・MANA・GRTをCoincheck販売所および取引所で5月13日取扱い開始"
+announce_utc = "2025-04-25T07:00:08Z"
+time_precision = "second"
+start_date_jst = "2025-05-13"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://corporate.coincheck.com/news/jkLXbp0V"
+
+  [[announcements.assets]]
+  ticker = "PEPE"
+  name_ja = "ペペ"
+  chain = "Ethereum"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "PEPEUSDT"
+  hyperliquid_perp = true
+  hyperliquid_symbol = "kPEPE"
+  measured_main_excess_net = 0.065243   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.022594
+
+  [[announcements.assets]]
+  ticker = "MASK"
+  name_ja = "マスクネットワーク"
+  chain = "Ethereum"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "MASKUSDT"
+  hyperliquid_perp = false
+  measured_main_excess_net = -0.006684   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.015219
+
+  [[announcements.assets]]
+  ticker = "MANA"
+  name_ja = "ディセントラランド"
+  chain = "Ethereum"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "MANAUSDT"
+  hyperliquid_perp = false
+  measured_main_excess_net = 0.013784   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.048891
+
+  [[announcements.assets]]
+  ticker = "GRT"
+  name_ja = "ザ・グラフ"
+  chain = "Ethereum"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "GRTUSDT"
+  hyperliquid_perp = false
+  measured_main_excess_net = 0.049131   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.099076
+
+[[announcements]]
+id = "cc-2025-11-11-FPL"
+venue = "Coincheck"
+kind = "new_listing"
+title = "ファンプラ（FPL）、本日11月11日よりCoincheck取引所・販売所にて取扱い開始"
+announce_utc = "2025-11-11T03:16:00Z"
+time_precision = "second"
+start_date_jst = "2025-11-11"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://corporate.coincheck.com/news/asblEnCn"
+note = "IEO銘柄（2025-10-14にIEO開始を公表）"
+
+  [[announcements.assets]]
+  ticker = "FPL"
+  name_ja = "ファンプラ"
+  first_in_jp = true
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "cc-2025-12-11-SOL"
+venue = "Coincheck"
+kind = "new_listing"
+title = "ソラナ（SOL）をCoincheck販売所および取引所で12月11日取扱い開始"
+announce_utc = "2025-12-11T06:55:49Z"
+time_precision = "second"
+start_date_jst = "2025-12-11"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://corporate.coincheck.com/news/bBwbDn38"
+
+  [[announcements.assets]]
+  ticker = "SOL"
+  name_ja = "ソラナ"
+  chain = "Solana"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SOLUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.031591   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.032282
+
+[[announcements]]
+id = "cc-2026-01-29-TRX"
+venue = "Coincheck"
+kind = "new_listing"
+title = "トロン（TRX）をCoincheck販売所および取引所で1月29日取扱い開始"
+announce_utc = "2026-01-29T04:44:57Z"
+time_precision = "second"
+start_date_jst = "2026-01-29"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://corporate.coincheck.com/news/66jDFyF4"
+
+  [[announcements.assets]]
+  ticker = "TRX"
+  name_ja = "トロン"
+  chain = "Tron"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "TRXUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.051435   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = 0.012833
+
+[[announcements]]
+id = "cc-2026-04-23-SUI"
+venue = "Coincheck"
+kind = "new_listing"
+title = "スイ（SUI）をCoincheck販売所および取引所で4月23日取扱い開始"
+announce_utc = "2026-04-23T03:02:02Z"
+time_precision = "second"
+start_date_jst = "2026-04-23"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://corporate.coincheck.com/news/6A22fKmO"
+
+  [[announcements.assets]]
+  ticker = "SUI"
+  name_ja = "スイ"
+  chain = "Sui"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SUIUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = 0.007987   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.032987
+
+[[announcements]]
+id = "cc-2026-08-31-ZPG"
+venue = "Coincheck"
+kind = "new_listing"
+title = "ジパングコイン（ZPG）をCoincheck販売所で8月31日取扱い開始"
+announce_utc = "2026-08-31T03:26:03Z"
+time_precision = "second"
+start_date_jst = "2026-08-31"
+start_precision = "date"
+listing_type = "販売所のみ"
+source_url = "https://corporate.coincheck.com/news/CZ-ymsqm"
+
+  [[announcements.assets]]
+  ticker = "ZPG"
+  name_ja = "ジパングコイン"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "国内専用銘柄。Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "cc-2026-10-08-NAC"
+venue = "Coincheck"
+kind = "new_listing"
+title = "Coincheck販売所において10月8日よりNOT A HOTEL COIN（NAC）取扱い開始"
+announce_utc = "2026-10-08T06:23:43Z"
+time_precision = "second"
+start_date_jst = "2026-10-08"
+start_precision = "date"
+listing_type = "販売所のみ"
+source_url = "https://corporate.coincheck.com/news/YlUTQPmi"
+
+  [[announcements.assets]]
+  ticker = "NAC"
+  name_ja = "NOT A HOTEL COIN"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "国内専用銘柄。Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "gmo-2024-12-13-NAC"
+venue = "GMOコイン"
+kind = "new_listing"
+title = "「NOT A HOTEL COIN（NAC）」取扱開始のお知らせ"
+announce_jst_hour = "2024-12-13 10:00-10:59 JST"
+time_precision = "hour"
+start_date_jst = "2024-12-13"
+start_precision = "date"
+listing_type = "販売所／取引所"
+source_url = "https://coin.z.com/jp/news/2024/12/13841/"
+note = "分までの発表時刻は取得不能（記事の time 要素は時までで分の位置に月が入る実装、RSS は直近10件のみ、sitemap lastmod は後日編集で上書き）"
+
+  [[announcements.assets]]
+  ticker = "NAC"
+  name_ja = "NOT A HOTEL COIN"
+  first_in_jp = true
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "gmo-2026-01-15-SUI"
+venue = "GMOコイン"
+kind = "new_listing"
+title = "「スイ（SUI）」取扱開始のお知らせ ～販売所・取引所・つみたて暗号資産にて、1月17日より取扱開始～"
+announce_utc = "2026-01-15T02:25:36Z"
+time_precision = "second"
+start_date_jst = "2026-01-17"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）＋つみたて"
+source_url = "https://coin.z.com/jp/news/2026/01/15442/"
+note = "発表時刻は GMO 公式 RSS の pubDate「Thu, 15 Jan 2026 11:25:36」をJSTとして採用（WordPress が +0000 と誤表示。別記事で lastmod(UTC)=pubDate-9h が秒単位一致することを確認）"
+
+  [[announcements.assets]]
+  ticker = "SUI"
+  name_ja = "スイ"
+  chain = "Sui"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SUIUSDT"
+  hyperliquid_perp = true
+  measured_main_excess_net = -0.010938   # エントリT+15分/イグジットT+24h、往復0.29%控除後・BTC超過
+  measured_pre_T24h_to_T5m_excess = -0.038107
+
+[[announcements]]
+id = "gmo-2026-03-17-WILD"
+venue = "GMOコイン"
+kind = "new_listing"
+title = "国内初！「ワイルダーワールド（WILD）」取扱開始のお知らせ ～取引所にて、3月23日より取扱開始～"
+announce_utc = "2026-03-17T02:00:44Z"
+time_precision = "second"
+start_date_jst = "2026-03-23"
+start_precision = "date"
+listing_type = "取引所（板）"
+source_url = "https://coin.z.com/jp/news/2026/03/15697/"
+note = "RSS pubDate 11:00:44 JST と sitemap lastmod 2026-03-17T02:00:44Z が秒単位一致"
+
+  [[announcements.assets]]
+  ticker = "WILD"
+  name_ja = "ワイルダーワールド"
+  first_in_jp = true
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "gmo-2026-04-15-ZPG"
+venue = "GMOコイン"
+kind = "new_listing"
+title = "「ジパングコイン（ZPG）」シリーズ取扱開始のお知らせ ～販売所にて、4月20日（月）より取扱開始～"
+announce_utc = "2026-04-15T02:55:53Z"
+time_precision = "second"
+start_date_jst = "2026-04-20"
+start_precision = "date"
+listing_type = "販売所のみ"
+source_url = "https://coin.z.com/jp/news/2026/04/15790/"
+
+  [[announcements.assets]]
+  ticker = "ZPG"
+  name_ja = "ジパングコイン"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "国内専用銘柄。Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "gmo-2026-10-29-MNT-BNB"
+venue = "GMOコイン"
+kind = "new_listing"
+title = "マントル（MNT）、ビルドアンドビルド（BNB）の取扱開始および取引ルールに関するお知らせ"
+announce_jst_hour = "2026-10-29 14:00-14:59 JST"
+time_precision = "hour"
+start_date_jst = "2026-10-29"
+start_precision = "date"
+listing_type = "販売所／取引所"
+source_url = "https://coin.z.com/jp/news/2026/10/16693/"
+note = "事前予告は一次情報で確認できず（news サイトマップ全419件を走査）。分までの時刻も取得不能"
+
+  [[announcements.assets]]
+  ticker = "MNT"
+  name_ja = "マントル"
+  chain = "Mantle"
+  first_in_jp = true
+  ref = "hyperliquid"
+  ref_symbol = "MNT"
+  hyperliquid_perp = true
+  identity_note = "Binance の現物ティッカー MNT は \"Mongolian Tughrik\"（法定通貨）であり Mantle ではない。MNTUSDT 等の現物ペアは存在しない。Hyperliquid の MNT perp は価格水準 $0.40-0.72 で Mantle と整合"
+
+  [[announcements.assets]]
+  ticker = "BNB"
+  name_ja = "ビルドアンドビルド"
+  chain = "BNB Chain"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "BNBUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bf-2025-01-28-PEPE"
+venue = "bitFlyer"
+kind = "new_listing"
+title = "ペペ（PEPE）取扱い開始予定のお知らせ（訂正版）"
+announce_date_jst = "2025-01-28"
+time_precision = "date"
+start_date_jst = "2025-01-30"
+start_utc = "2025-01-30T06:00:00Z"
+start_precision = "minute"
+start_note = "PDF「売買：1月30日（木）15:00 頃」"
+listing_type = "販売所のみ"
+source_url = "https://bitflyer.com/pub/20250128-handling-PEPE-ja.pdf"
+
+  [[announcements.assets]]
+  ticker = "PEPE"
+  name_ja = "ペペ"
+  chain = "Ethereum"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "PEPEUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bf-2026-06-15-SOL"
+venue = "bitFlyer"
+kind = "new_listing"
+title = "ソラナ（SOL）取扱い開始予定のお知らせ"
+announce_date_jst = "2026-06-15"
+time_precision = "date"
+start_date_jst = "2026-06-24"
+start_utc = "2026-06-24T04:00:00Z"
+start_precision = "hour"
+start_note = "PDF「売買：6月24日（水）13 時頃」"
+listing_type = "販売所のみ"
+source_url = "https://bitflyer.com/pub/20260615-handling-SOL-ja.pdf"
+
+  [[announcements.assets]]
+  ticker = "SOL"
+  name_ja = "ソラナ"
+  chain = "Solana"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SOLUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bf-2026-07-13-TRX-ATOM-XDC"
+venue = "bitFlyer"
+kind = "new_listing"
+title = "トロン（TRX）、コスモス（ATOM）、XDCネットワーク（XDC）取扱い開始予定のお知らせ"
+announce_date_jst = "2026-07-13"
+time_precision = "date"
+listing_type = "販売所のみ"
+source_url = "https://bitflyer.com/pub/20260713-handling-TRX-ATOM-XDC-ja.pdf"
+note = "この予告の後、2026-09-16 に GRAM を追加した再予告が出ている"
+
+  [[announcements.assets]]
+  ticker = "TRX"
+  name_ja = "トロン"
+  chain = "Tron"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "TRXUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "ATOM"
+  name_ja = "コスモス"
+  chain = "Cosmos"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "ATOMUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "XDC"
+  name_ja = "XDCネットワーク"
+  chain = "XDC"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "bf-2026-09-16-TRX-GRAM-ATOM-XDC"
+venue = "bitFlyer"
+kind = "new_listing"
+title = "トロン（TRX）、グラム（GRAM）、コスモス（ATOM）XDCネットワーク（XDC）の取扱い開始予定のお知らせ"
+announce_date_jst = "2026-09-16"
+time_precision = "date"
+start_date_jst = "2026-09-29"
+start_utc = "2026-09-29T04:00:00Z"
+start_precision = "hour"
+start_note = "PDF「売買：9月29日（火）13 時頃」"
+listing_type = "販売所のみ"
+source_url = "https://bitflyer.com/pub/20260916-handling-TRX-GRAM-ATOM-XDC-ja.pdf"
+
+  [[announcements.assets]]
+  ticker = "TRX"
+  name_ja = "トロン"
+  chain = "Tron"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "TRXUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "GRAM"
+  name_ja = "グラム"
+  chain = "TON"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "GRAMUSDT"
+  hyperliquid_perp = true
+  identity_note = "bitFlyer PDF は GRAM を「The Open Network（TON）のネイティブトークン」と明記。Binance の GRAM はネットワーク TON/TONMEMO。Binance TONUSDT は status=BREAK で1分足が一切返らず、GRAMUSDT の1分足は 2026-07-02 開始。Hyperliquid では TON perp が 2026-06-15($1.81)まで、GRAM perp が 2026-07-02($1.67)から。価格水準が連続しており Toncoin の改称と整合"
+
+  [[announcements.assets]]
+  ticker = "ATOM"
+  name_ja = "コスモス"
+  chain = "Cosmos"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "ATOMUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "XDC"
+  name_ja = "XDCネットワーク"
+  chain = "XDC"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "sbivc-2025-02-12-14coins"
+venue = "SBI VCトレード"
+kind = "new_listing"
+title = "【重要】取扱い銘柄の追加に伴う、『暗号資産取引説明書』改訂のお知らせ（14銘柄取扱い開始）"
+announce_date_jst = "2025-02-12"
+time_precision = "date"
+start_date_jst = "2025-02-26"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://www.sbivc.co.jp/newsview/3xfpd9er0"
+note = "銘柄名は本文に記載がなく、同社が同時公開した新旧対照表PDF https://www.sbivc.co.jp/assets/docs/comparison20250212_manual-ex_tt.pdf の下線部から特定。対照表の下線部から14銘柄すべてを特定: ALGO, APE, AXS, BAT, CHZ, ENJ, ETC, FCR, MKR, MONA, NIDT, OMG, SAND, TRX。いずれも他の国内業者で既に取扱いのある銘柄（SBIによるBITPOINT取得後のラインナップ統合）"
+
+  [[announcements.assets]]
+  ticker = "ALGO"
+  name_ja = "アルゴランド"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "ALGOUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "APE"
+  name_ja = "エイプコイン"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "APEUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "AXS"
+  name_ja = "アクシーインフィニティ"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "AXSUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "BAT"
+  name_ja = "ベーシックアテンショントークン"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "BATUSDT"
+  hyperliquid_perp = false
+
+  [[announcements.assets]]
+  ticker = "CHZ"
+  name_ja = "チリーズ"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "CHZUSDT"
+  hyperliquid_perp = false
+
+  [[announcements.assets]]
+  ticker = "ENJ"
+  name_ja = "エンジンコイン"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "ENJUSDT"
+  hyperliquid_perp = false
+
+  [[announcements.assets]]
+  ticker = "ETC"
+  name_ja = "イーサリアムクラシック"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "ETCUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "SAND"
+  name_ja = "ザ・サンドボックス"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SANDUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "TRX"
+  name_ja = "トロン"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "TRXUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "MKR"
+  name_ja = "メイカー"
+  first_in_jp = false
+  hyperliquid_perp = true
+  no_ref_reason = "Binance MKRUSDT は status=BREAK で1分足が返らない（計測不能）"
+
+  [[announcements.assets]]
+  ticker = "OMG"
+  name_ja = "オーエムジー"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "Binance OMGUSDT は status=BREAK で1分足が返らない（計測不能）"
+
+  [[announcements.assets]]
+  ticker = "FCR"
+  name_ja = "エフシーアールコイン"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+  [[announcements.assets]]
+  ticker = "MONA"
+  name_ja = "モナ"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+  [[announcements.assets]]
+  ticker = "NIDT"
+  name_ja = "ニッポンアイドルトークン"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "国内専用銘柄。Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "sbivc-2025-03-25-USDC"
+venue = "SBI VCトレード"
+kind = "new_listing"
+title = "【国内初】ユーエスディーシー（USDC）一般向け取扱い開始のお知らせ"
+announce_date_jst = "2025-03-25"
+time_precision = "date"
+start_date_jst = "2025-03-25"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://www.sbivc.co.jp/newsview/2mjic5dcvjtv"
+note = "ステーブルコイン。海外価格はドルペッグで事実上動かないため価格反応の計測対象として意味を持たない"
+
+  [[announcements.assets]]
+  ticker = "USDC"
+  name_ja = "ユーエスディーシー"
+  chain = "multi"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "USDCUSDT"
+  hyperliquid_perp = false
+  identity_note = "ドルペッグのステーブルコイン"
+
+[[announcements]]
+id = "sbivc-2026-02-27-CANTON"
+venue = "SBI VCトレード"
+kind = "new_listing"
+title = "2026年3月25日(水)より 国内初※カントンコイン（Canton）取扱い開始を目指す"
+announce_date_jst = "2026-02-27"
+time_precision = "date"
+start_date_jst = "2026-03-25"
+start_precision = "date"
+listing_type = "販売所／取引所"
+source_url = "https://www.sbivc.co.jp/newsview/4ji6fu9b63q"
+
+  [[announcements.assets]]
+  ticker = "CANTON"
+  name_ja = "カントンコイン"
+  chain = "Canton"
+  first_in_jp = true
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "sbivc-2026-03-11-TON-SUI"
+venue = "SBI VCトレード"
+kind = "new_listing"
+title = "トンコイン（TON）、スイ（SUI）の取扱い開始のお知らせ"
+announce_date_jst = "2026-03-11"
+time_precision = "date"
+start_date_jst = "2026-03-11"
+start_precision = "date"
+listing_type = "販売所＋取引所（板）"
+source_url = "https://www.sbivc.co.jp/newsview/2avqyrpszh"
+
+  [[announcements.assets]]
+  ticker = "TON"
+  name_ja = "トンコイン"
+  chain = "TON"
+  first_in_jp = false
+  ref = "hyperliquid"
+  ref_symbol = "TON"
+  hyperliquid_perp = true
+  identity_note = "Binance TONUSDT は現在 status=BREAK で1分足が一切返らないため、Hyperliquid の TON perp を参照に使用"
+
+  [[announcements.assets]]
+  ticker = "SUI"
+  name_ja = "スイ"
+  chain = "Sui"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "SUIUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "sbivc-2026-06-24-RLUSD-JPYSC"
+venue = "SBI VCトレード"
+kind = "new_listing"
+title = "アールエルユーエスディー（RLUSD）及びジェイピーワイエスシー(JPYSC)取扱い開始"
+announce_date_jst = "2026-06-24"
+time_precision = "date"
+listing_type = "電子決済手段（ステーブルコイン）"
+source_url = "https://www.sbivc.co.jp/newsview/skwdcxjbfjab"
+note = "電子決済手段（ステーブルコイン）。価格反応の計測対象として意味を持たない"
+
+  [[announcements.assets]]
+  ticker = "RLUSD"
+  name_ja = "アールエルユーエスディー"
+  chain = "Ethereum/XRPL"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "RLUSDUSDT"
+  hyperliquid_perp = false
+  identity_note = "ドルペッグのステーブルコイン"
+
+  [[announcements.assets]]
+  ticker = "JPYSC"
+  name_ja = "ジェイピーワイエスシー"
+  first_in_jp = true
+  hyperliquid_perp = false
+  no_ref_reason = "国内専用の円建てステーブルコイン。海外市場に存在しない"
+
+[[announcements]]
+id = "bp-2024-12-25-BNB"
+venue = "BITPOINT"
+kind = "new_listing"
+title = "BNB取り扱い開始のお知らせ"
+announce_date_jst = "2024-12-25"
+time_precision = "date"
+listing_type = "販売所／取引所"
+source_url = "https://www.bitpoint.co.jp/news/info/info-2024122501/"
+
+  [[announcements.assets]]
+  ticker = "BNB"
+  name_ja = "ビルドアンドビルド"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "BNBUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bp-2025-02-20-HBAR"
+venue = "BITPOINT"
+kind = "new_listing"
+title = "HBAR（ヘデラ）取り扱い開始のお知らせ"
+announce_date_jst = "2025-02-20"
+time_precision = "date"
+listing_type = "販売所／取引所"
+source_url = "https://www.bitpoint.co.jp/news/info/info-2025022001/"
+
+  [[announcements.assets]]
+  ticker = "HBAR"
+  name_ja = "ヘデラ"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "HBARUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bp-2025-06-13-TRUMP"
+venue = "BITPOINT"
+kind = "new_listing"
+title = "日本初解禁！トランプ取り扱い開始のお知らせ"
+announce_date_jst = "2025-06-13"
+time_precision = "date"
+listing_type = "販売所／取引所"
+source_url = "https://www.bitpoint.co.jp/news/info/info-2025061301/"
+
+  [[announcements.assets]]
+  ticker = "TRUMP"
+  name_ja = "オフィシャルトランプ"
+  first_in_jp = true
+  ref = "binance"
+  ref_symbol = "TRUMPUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bp-2025-07-30-XLM"
+venue = "BITPOINT"
+kind = "new_listing"
+title = "ステラルーメン（XLM）取り扱い開始のお知らせ"
+announce_date_jst = "2025-07-30"
+time_precision = "date"
+listing_type = "販売所／取引所"
+source_url = "https://www.bitpoint.co.jp/news/info/info-2025073001/"
+
+  [[announcements.assets]]
+  ticker = "XLM"
+  name_ja = "ステラルーメン"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "XLMUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bp-2024-12-27-PEPE-pro"
+venue = "BITPOINT"
+kind = "new_service_type"
+title = "PEPE 日本初の板取引！BITPOINT PRO取り扱い開始のお知らせ"
+announce_date_jst = "2024-12-27"
+time_precision = "date"
+listing_type = "取引所（板, BITPOINT PRO）"
+source_url = "https://www.bitpoint.co.jp/news/info/info-2024122701/"
+note = "既に同社で取扱中の銘柄に板取引を追加。新規取扱ではない。"
+
+  [[announcements.assets]]
+  ticker = "PEPE"
+  name_ja = "ペペ"
+  chain = "Ethereum"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "PEPEUSDT"
+  hyperliquid_perp = true
+
+[[announcements]]
+id = "bp-2025-02-20-ATOM-TSUGT-pro"
+venue = "BITPOINT"
+kind = "new_service_type"
+title = "ATOM・TSUGT BITPOINT PRO取り扱い開始のお知らせ"
+announce_date_jst = "2025-02-20"
+time_precision = "date"
+listing_type = "取引所（板, BITPOINT PRO）"
+source_url = "https://www.bitpoint.co.jp/news/info/info-2025022002/"
+note = "既に同社で取扱中の銘柄に板取引を追加。新規取扱ではない。"
+
+  [[announcements.assets]]
+  ticker = "ATOM"
+  name_ja = "コスモス"
+  chain = "Cosmos"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "ATOMUSDT"
+  hyperliquid_perp = true
+
+  [[announcements.assets]]
+  ticker = "TSUGT"
+  name_ja = "ツグツグ"
+  first_in_jp = false
+  hyperliquid_perp = false
+  no_ref_reason = "Binance現物・Hyperliquid perp いずれにも存在しない"
+
+[[announcements]]
+id = "bp-2025-08-27-TRUMP-pro"
+venue = "BITPOINT"
+kind = "new_service_type"
+title = "TRUMP日本初の板取引！BITPOINT PRO取り扱い開始のお知らせ"
+announce_date_jst = "2025-08-27"
+time_precision = "date"
+listing_type = "取引所（板, BITPOINT PRO）"
+source_url = "https://www.bitpoint.co.jp/news/info/info-2025082701/"
+note = "既に同社で取扱中の銘柄に板取引を追加。新規取扱ではない。"
+
+  [[announcements.assets]]
+  ticker = "TRUMP"
+  name_ja = "オフィシャルトランプ"
+  chain = "Solana"
+  first_in_jp = false
+  ref = "binance"
+  ref_symbol = "TRUMPUSDT"
+  hyperliquid_perp = true
+

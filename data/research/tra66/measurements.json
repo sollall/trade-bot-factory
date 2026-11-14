@@ -1,0 +1,2282 @@
+[
+ {
+  "event_id": "bb-2024-11-19-SOL-CYBER",
+  "venue": "bitbank",
+  "ticker": "SOL",
+  "ref": "binance",
+  "ref_symbol": "SOLUSDT",
+  "announce_utc": "2024-11-19T03:00:05Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 239.85,
+   "T-1h": 238.48,
+   "T-5m": 240.7,
+   "T": 241.34,
+   "T+5m": 241.94,
+   "T+15m": 242.93,
+   "T+1h": 240.79,
+   "T+4h": 243.32,
+   "T+24h": 232.43,
+   "T+72h": 257.93
+  },
+  "trades": {
+   "T-24h": 1491,
+   "T-1h": 2236,
+   "T-5m": 1219,
+   "T": 1199,
+   "T+5m": 1425,
+   "T+15m": 2339,
+   "T+1h": 2337,
+   "T+4h": 2600,
+   "T+24h": 2250,
+   "T+72h": 2441
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.005704,
+    "net": 0.002804,
+    "btc": 0.007979,
+    "excess_net": -0.005175,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": -0.039307,
+    "net": -0.042207,
+    "btc": 0.005527,
+    "excess_net": -0.047734,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.066091,
+    "net": 0.063191,
+    "btc": 0.081343,
+    "excess_net": -0.018152,
+    "exit_offset_s": 259200
+   },
+   "T+5m->start": {
+    "gross": -0.040671,
+    "net": -0.043571,
+    "btc": 0.035562,
+    "excess_net": -0.079133,
+    "exit_offset_s": 172795
+   },
+   "T+15m->T+4h": {
+    "gross": 0.001605,
+    "net": -0.001295,
+    "btc": 0.008423,
+    "excess_net": -0.009718,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": -0.043222,
+    "net": -0.046122,
+    "btc": 0.00597,
+    "excess_net": -0.052093,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.061746,
+    "net": 0.058846,
+    "btc": 0.08182,
+    "excess_net": -0.022973,
+    "exit_offset_s": 259200
+   },
+   "T+15m->start": {
+    "gross": -0.044581,
+    "net": -0.047481,
+    "btc": 0.036018,
+    "excess_net": -0.083499,
+    "exit_offset_s": 172795
+   },
+   "T+1h->T+4h": {
+    "gross": 0.010507,
+    "net": 0.007607,
+    "btc": 0.005532,
+    "excess_net": 0.002075,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": -0.034719,
+    "net": -0.037619,
+    "btc": 0.003086,
+    "excess_net": -0.040705,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.071182,
+    "net": 0.068282,
+    "btc": 0.078718,
+    "excess_net": -0.010436,
+    "exit_offset_s": 259200
+   },
+   "T+1h->start": {
+    "gross": -0.03609,
+    "net": -0.03899,
+    "btc": 0.033048,
+    "excess_net": -0.072037,
+    "exit_offset_s": 172795
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 28094,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.003544,
+   "btc": 0.007438,
+   "excess": -0.003894
+  },
+  "kind": "new_listing",
+  "listing_type": "取引所（板）＋販売所＋貸して増やす"
+ },
+ {
+  "event_id": "bb-2024-11-19-SOL-CYBER",
+  "venue": "bitbank",
+  "ticker": "CYBER",
+  "ref": "binance",
+  "ref_symbol": "CYBERUSDT",
+  "announce_utc": "2024-11-19T03:00:05Z",
+  "first_in_jp": true,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 3.663,
+   "T-1h": 3.73,
+   "T-5m": 3.712,
+   "T": 3.715,
+   "T+5m": 3.718,
+   "T+15m": 3.712,
+   "T+1h": 3.712,
+   "T+4h": 3.715,
+   "T+24h": 3.479,
+   "T+72h": 3.742
+  },
+  "trades": {
+   "T-24h": 20,
+   "T-1h": 14,
+   "T-5m": 4,
+   "T": 56,
+   "T+5m": 11,
+   "T+15m": 4,
+   "T+1h": 10,
+   "T+4h": 81,
+   "T+24h": 31,
+   "T+72h": 2
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.000807,
+    "net": -0.003707,
+    "btc": 0.007979,
+    "excess_net": -0.011686,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": -0.064282,
+    "net": -0.067182,
+    "btc": 0.005527,
+    "excess_net": -0.072709,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.006455,
+    "net": 0.003555,
+    "btc": 0.081343,
+    "excess_net": -0.077788,
+    "exit_offset_s": 259200
+   },
+   "T+5m->start": {
+    "gross": -0.101399,
+    "net": -0.104299,
+    "btc": 0.035562,
+    "excess_net": -0.13986,
+    "exit_offset_s": 172795
+   },
+   "T+15m->T+4h": {
+    "gross": 0.000808,
+    "net": -0.002092,
+    "btc": 0.008423,
+    "excess_net": -0.010515,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": -0.062769,
+    "net": -0.065669,
+    "btc": 0.00597,
+    "excess_net": -0.07164,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.008082,
+    "net": 0.005182,
+    "btc": 0.08182,
+    "excess_net": -0.076638,
+    "exit_offset_s": 259200
+   },
+   "T+15m->start": {
+    "gross": -0.099946,
+    "net": -0.102846,
+    "btc": 0.036018,
+    "excess_net": -0.138864,
+    "exit_offset_s": 172795
+   },
+   "T+1h->T+4h": {
+    "gross": 0.000808,
+    "net": -0.002092,
+    "btc": 0.005532,
+    "excess_net": -0.007624,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": -0.062769,
+    "net": -0.065669,
+    "btc": 0.003086,
+    "excess_net": -0.068756,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.008082,
+    "net": 0.005182,
+    "btc": 0.078718,
+    "excess_net": -0.073536,
+    "exit_offset_s": 259200
+   },
+   "T+1h->start": {
+    "gross": -0.099946,
+    "net": -0.102846,
+    "btc": 0.033048,
+    "excess_net": -0.135894,
+    "exit_offset_s": 172795
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 126,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.013377,
+   "btc": 0.007438,
+   "excess": 0.005939
+  },
+  "kind": "new_listing",
+  "listing_type": "取引所（板）＋販売所＋貸して増やす"
+ },
+ {
+  "event_id": "bb-2024-12-03-RENDER",
+  "venue": "bitbank",
+  "ticker": "RENDER",
+  "ref": "binance",
+  "ref_symbol": "RENDERUSDT",
+  "announce_utc": "2024-12-03T06:13:45Z",
+  "first_in_jp": false,
+  "is_migration": true,
+  "levels": {
+   "T-24h": 8.402,
+   "T-1h": 9.115,
+   "T-5m": 9.107,
+   "T": 9.123,
+   "T+5m": 9.148,
+   "T+15m": 9.194,
+   "T+1h": 8.982,
+   "T+4h": 8.961,
+   "T+24h": 8.851,
+   "T+72h": 10.617
+  },
+  "trades": {
+   "T-24h": 100,
+   "T-1h": 119,
+   "T-5m": 308,
+   "T": 210,
+   "T+5m": 124,
+   "T+15m": 393,
+   "T+1h": 376,
+   "T+4h": 137,
+   "T+24h": 117,
+   "T+72h": 506
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.020442,
+    "net": -0.023342,
+    "btc": -0.007242,
+    "excess_net": -0.016099,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": -0.032466,
+    "net": -0.035366,
+    "btc": 0.002073,
+    "excess_net": -0.037439,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.160582,
+    "net": 0.157682,
+    "btc": 0.019724,
+    "excess_net": 0.137958,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.025343,
+    "net": -0.028243,
+    "btc": -0.008303,
+    "excess_net": -0.019939,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": -0.037307,
+    "net": -0.040207,
+    "btc": 0.001002,
+    "excess_net": -0.041209,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.154775,
+    "net": 0.151875,
+    "btc": 0.018634,
+    "excess_net": 0.133241,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.002338,
+    "net": -0.005238,
+    "btc": -0.002406,
+    "excess_net": -0.002832,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": -0.014585,
+    "net": -0.017485,
+    "btc": 0.006954,
+    "excess_net": -0.024439,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.182031,
+    "net": 0.179131,
+    "btc": 0.024691,
+    "excess_net": 0.154439,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 2457,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.083909,
+   "btc": -0.000169,
+   "excess": 0.084077
+  },
+  "kind": "migration",
+  "listing_type": "取引所（板）＋販売所"
+ },
+ {
+  "event_id": "bb-2025-01-31-TRX",
+  "venue": "bitbank",
+  "ticker": "TRX",
+  "ref": "binance",
+  "ref_symbol": "TRXUSDT",
+  "announce_utc": "2025-01-31T03:00:05Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.2435,
+   "T-1h": 0.2537,
+   "T-5m": 0.2532,
+   "T": 0.2531,
+   "T+5m": 0.2529,
+   "T+15m": 0.2526,
+   "T+1h": 0.2518,
+   "T+4h": 0.2546,
+   "T+24h": 0.2559,
+   "T+72h": 0.2056
+  },
+  "trades": {
+   "T-24h": 453,
+   "T-1h": 81,
+   "T-5m": 98,
+   "T": 85,
+   "T+5m": 218,
+   "T+15m": 112,
+   "T+1h": 160,
+   "T+4h": 279,
+   "T+24h": 155,
+   "T+72h": 766
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.006722,
+    "net": 0.003822,
+    "btc": 0.004751,
+    "excess_net": -0.000929,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.011862,
+    "net": 0.008962,
+    "btc": -0.014406,
+    "excess_net": 0.023369,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": -0.18703,
+    "net": -0.18993,
+    "btc": -0.098295,
+    "excess_net": -0.091635,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.007918,
+    "net": 0.005018,
+    "btc": 0.003074,
+    "excess_net": 0.001944,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.013064,
+    "net": 0.010164,
+    "btc": -0.016052,
+    "excess_net": 0.026216,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": -0.186065,
+    "net": -0.188965,
+    "btc": -0.099801,
+    "excess_net": -0.089164,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.01112,
+    "net": 0.00822,
+    "btc": 0.001838,
+    "excess_net": 0.006382,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.016283,
+    "net": 0.013383,
+    "btc": -0.017264,
+    "excess_net": 0.030647,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": -0.183479,
+    "net": -0.186379,
+    "btc": -0.10091,
+    "excess_net": -0.085469,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 2243,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.039836,
+   "btc": -0.001773,
+   "excess": 0.041609
+  },
+  "kind": "new_listing",
+  "listing_type": "取引所（板）＋販売所＋貸して増やす"
+ },
+ {
+  "event_id": "bb-2025-02-28-LPT",
+  "venue": "bitbank",
+  "ticker": "LPT",
+  "ref": "binance",
+  "ref_symbol": "LPTUSDT",
+  "announce_utc": "2025-02-28T03:00:05Z",
+  "first_in_jp": true,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 6.981,
+   "T-1h": 6.534,
+   "T-5m": 6.498,
+   "T": 6.532,
+   "T+5m": 6.565,
+   "T+15m": 6.556,
+   "T+1h": 6.377,
+   "T+4h": 6.36,
+   "T+24h": 6.624,
+   "T+72h": 7.209
+  },
+  "trades": {
+   "T-24h": 167,
+   "T-1h": 543,
+   "T-5m": 82,
+   "T": 186,
+   "T+5m": 144,
+   "T+15m": 148,
+   "T+1h": 255,
+   "T+4h": 150,
+   "T+24h": 13,
+   "T+72h": 8
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.031226,
+    "net": -0.034126,
+    "btc": -0.024344,
+    "excess_net": -0.009782,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.008987,
+    "net": 0.006087,
+    "btc": 0.045725,
+    "excess_net": -0.039638,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.098096,
+    "net": 0.095196,
+    "btc": 0.145347,
+    "excess_net": -0.050151,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.029896,
+    "net": -0.032796,
+    "btc": -0.020166,
+    "excess_net": -0.01263,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.010372,
+    "net": 0.007472,
+    "btc": 0.050203,
+    "excess_net": -0.04273,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.099603,
+    "net": 0.096703,
+    "btc": 0.150252,
+    "excess_net": -0.053548,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.002666,
+    "net": -0.005566,
+    "btc": -0.012591,
+    "excess_net": 0.007026,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.038733,
+    "net": 0.035833,
+    "btc": 0.058321,
+    "excess_net": -0.022488,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.130469,
+    "net": 0.127569,
+    "btc": 0.159144,
+    "excess_net": -0.031575,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 1934,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.069188,
+   "btc": -0.046089,
+   "excess": -0.023099
+  },
+  "kind": "new_listing",
+  "listing_type": "取引所（板）＋販売所"
+ },
+ {
+  "event_id": "bb-2025-05-09-ATOM",
+  "venue": "bitbank",
+  "ticker": "ATOM",
+  "ref": "binance",
+  "ref_symbol": "ATOMUSDT",
+  "announce_utc": "2025-05-09T03:00:05Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 4.247,
+   "T-1h": 4.604,
+   "T-5m": 4.586,
+   "T": 4.601,
+   "T+5m": 4.601,
+   "T+15m": 4.623,
+   "T+1h": 4.564,
+   "T+4h": 4.677,
+   "T+24h": 4.92,
+   "T+72h": 5.32
+  },
+  "trades": {
+   "T-24h": 25,
+   "T-1h": 110,
+   "T-5m": 27,
+   "T": 50,
+   "T+5m": 22,
+   "T+15m": 38,
+   "T+1h": 35,
+   "T+4h": 498,
+   "T+24h": 48,
+   "T+72h": 65
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.016518,
+    "net": 0.013618,
+    "btc": 0.006434,
+    "excess_net": 0.007184,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.069333,
+    "net": 0.066433,
+    "btc": 0.005544,
+    "excess_net": 0.060888,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.15627,
+    "net": 0.15337,
+    "btc": 0.012473,
+    "excess_net": 0.140898,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.011681,
+    "net": 0.008781,
+    "btc": 0.004892,
+    "excess_net": 0.003889,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.064244,
+    "net": 0.061344,
+    "btc": 0.004003,
+    "excess_net": 0.057341,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.150768,
+    "net": 0.147868,
+    "btc": 0.010921,
+    "excess_net": 0.136947,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.024759,
+    "net": 0.021859,
+    "btc": 0.008157,
+    "excess_net": 0.013702,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.078002,
+    "net": 0.075102,
+    "btc": 0.007266,
+    "excess_net": 0.067836,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.165644,
+    "net": 0.162744,
+    "btc": 0.014206,
+    "excess_net": 0.148538,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 737,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.079821,
+   "btc": 0.039811,
+   "excess": 0.04001
+  },
+  "kind": "new_listing",
+  "listing_type": "取引所（板）＋販売所"
+ },
+ {
+  "event_id": "bb-2025-08-08-SUI",
+  "venue": "bitbank",
+  "ticker": "SUI",
+  "ref": "binance",
+  "ref_symbol": "SUIUSDT",
+  "announce_utc": "2025-08-08T06:00:04Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 3.4832,
+   "T-1h": 3.7717,
+   "T-5m": 3.7856,
+   "T": 3.7848,
+   "T+5m": 3.7912,
+   "T+15m": 3.7994,
+   "T+1h": 3.8296,
+   "T+4h": 3.8107,
+   "T+24h": 3.9389,
+   "T+72h": 3.9463
+  },
+  "trades": {
+   "T-24h": 486,
+   "T-1h": 317,
+   "T-5m": 189,
+   "T": 242,
+   "T+5m": 265,
+   "T+15m": 358,
+   "T+1h": 1462,
+   "T+4h": 348,
+   "T+24h": 490,
+   "T+72h": 185
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.005143,
+    "net": 0.002243,
+    "btc": 0.001531,
+    "excess_net": 0.000712,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.038959,
+    "net": 0.036059,
+    "btc": 0.002119,
+    "excess_net": 0.033939,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.040911,
+    "net": 0.038011,
+    "btc": 0.048078,
+    "excess_net": -0.010067,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.002974,
+    "net": 7.4e-05,
+    "btc": 0.001182,
+    "excess_net": -0.001107,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.036716,
+    "net": 0.033816,
+    "btc": 0.00177,
+    "excess_net": 0.032047,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.038664,
+    "net": 0.035764,
+    "btc": 0.047712,
+    "excess_net": -0.011948,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.004935,
+    "net": -0.007835,
+    "btc": -0.000267,
+    "excess_net": -0.007568,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.028541,
+    "net": 0.025641,
+    "btc": 0.00032,
+    "excess_net": 0.025321,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.030473,
+    "net": 0.027573,
+    "btc": 0.046196,
+    "excess_net": -0.018623,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 4442,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.086817,
+   "btc": 0.017619,
+   "excess": 0.069198
+  },
+  "kind": "new_listing",
+  "listing_type": "取引所（板）＋販売所"
+ },
+ {
+  "event_id": "bb-2025-09-11-SKY",
+  "venue": "bitbank",
+  "ticker": "SKY",
+  "ref": "binance",
+  "ref_symbol": "SKYUSDT",
+  "announce_utc": "2025-09-11T08:56:15Z",
+  "first_in_jp": true,
+  "is_migration": true,
+  "levels": {
+   "T-24h": null,
+   "T-1h": null,
+   "T-5m": null,
+   "T": null,
+   "T+5m": null,
+   "T+15m": null,
+   "T+1h": null,
+   "T+4h": null,
+   "T+24h": null,
+   "T+72h": null
+  },
+  "trades": {
+   "T-24h": null,
+   "T-1h": null,
+   "T-5m": null,
+   "T": null,
+   "T+5m": null,
+   "T+15m": null,
+   "T+1h": null,
+   "T+4h": null,
+   "T+24h": null,
+   "T+72h": null
+  },
+  "returns": {
+   "T+5m->T+4h": null,
+   "T+5m->T+24h": null,
+   "T+5m->T+72h": null,
+   "T+15m->T+4h": null,
+   "T+15m->T+24h": null,
+   "T+15m->T+72h": null,
+   "T+1h->T+4h": null,
+   "T+1h->T+24h": null,
+   "T+1h->T+72h": null
+  },
+  "flags": [
+   "coverage<90%",
+   "no_trades_T..T+15m"
+  ],
+  "coverage_T-1h_T+4h": 0.0,
+  "trades_T_to_T+15m": 0,
+  "pre_T-24h_to_T-5m": {
+   "gross": null,
+   "btc": 0.014441,
+   "excess": null
+  },
+  "kind": "migration",
+  "listing_type": "取引所（板）＋販売所"
+ },
+ {
+  "event_id": "bb-2025-04-11-DOGESOL-margin",
+  "venue": "bitbank",
+  "ticker": "DOGE",
+  "ref": "binance",
+  "ref_symbol": "DOGEUSDT",
+  "announce_utc": "2025-04-11T03:00:05Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.15676,
+   "T-1h": 0.15621,
+   "T-5m": 0.15624,
+   "T": 0.15636,
+   "T+5m": 0.15672,
+   "T+15m": 0.15645,
+   "T+1h": 0.1568,
+   "T+4h": 0.15733,
+   "T+24h": 0.15801,
+   "T+72h": 0.16613
+  },
+  "trades": {
+   "T-24h": 456,
+   "T-1h": 761,
+   "T-5m": 179,
+   "T": 302,
+   "T+5m": 425,
+   "T+15m": 317,
+   "T+1h": 212,
+   "T+4h": 484,
+   "T+24h": 704,
+   "T+72h": 2714
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.003892,
+    "net": 0.000992,
+    "btc": 0.008126,
+    "excess_net": -0.007134,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.008231,
+    "net": 0.005331,
+    "btc": 0.029032,
+    "excess_net": -0.023701,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.060043,
+    "net": 0.057143,
+    "btc": 0.055002,
+    "excess_net": 0.002141,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.005625,
+    "net": 0.002725,
+    "btc": 0.00763,
+    "excess_net": -0.004905,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.009971,
+    "net": 0.007071,
+    "btc": 0.028526,
+    "excess_net": -0.021454,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.061873,
+    "net": 0.058973,
+    "btc": 0.054483,
+    "excess_net": 0.00449,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.00338,
+    "net": 0.00048,
+    "btc": 0.003667,
+    "excess_net": -0.003187,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.007717,
+    "net": 0.004817,
+    "btc": 0.02448,
+    "excess_net": -0.019663,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.059503,
+    "net": 0.056603,
+    "btc": 0.050335,
+    "excess_net": 0.006267,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 4471,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.003317,
+   "btc": -0.021964,
+   "excess": 0.018647
+  },
+  "kind": "new_service_type",
+  "listing_type": "信用取引（レバレッジ）"
+ },
+ {
+  "event_id": "bb-2025-04-11-DOGESOL-margin",
+  "venue": "bitbank",
+  "ticker": "SOL",
+  "ref": "binance",
+  "ref_symbol": "SOLUSDT",
+  "announce_utc": "2025-04-11T03:00:05Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 116.88,
+   "T-1h": 114.02,
+   "T-5m": 114.25,
+   "T": 114.56,
+   "T+5m": 114.95,
+   "T+15m": 114.96,
+   "T+1h": 115.49,
+   "T+4h": 117.0,
+   "T+24h": 119.84,
+   "T+72h": 133.17
+  },
+  "trades": {
+   "T-24h": 740,
+   "T-1h": 1991,
+   "T-5m": 673,
+   "T": 975,
+   "T+5m": 992,
+   "T+15m": 1153,
+   "T+1h": 830,
+   "T+4h": 1600,
+   "T+24h": 1958,
+   "T+72h": 4986
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.017834,
+    "net": 0.014934,
+    "btc": 0.008126,
+    "excess_net": 0.006808,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.04254,
+    "net": 0.03964,
+    "btc": 0.029032,
+    "excess_net": 0.010608,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.158504,
+    "net": 0.155604,
+    "btc": 0.055002,
+    "excess_net": 0.100602,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.017745,
+    "net": 0.014845,
+    "btc": 0.00763,
+    "excess_net": 0.007215,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.04245,
+    "net": 0.03955,
+    "btc": 0.028526,
+    "excess_net": 0.011024,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.158403,
+    "net": 0.155503,
+    "btc": 0.054483,
+    "excess_net": 0.10102,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.013075,
+    "net": 0.010175,
+    "btc": 0.003667,
+    "excess_net": 0.006508,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.037666,
+    "net": 0.034766,
+    "btc": 0.02448,
+    "excess_net": 0.010286,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.153087,
+    "net": 0.150187,
+    "btc": 0.050335,
+    "excess_net": 0.099852,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 14946,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.022502,
+   "btc": -0.021964,
+   "excess": -0.000538
+  },
+  "kind": "new_service_type",
+  "listing_type": "信用取引（レバレッジ）"
+ },
+ {
+  "event_id": "cc-2025-01-15-DOGE",
+  "venue": "Coincheck",
+  "ticker": "DOGE",
+  "ref": "binance",
+  "ref_symbol": "DOGEUSDT",
+  "announce_utc": "2025-01-15T05:31:46Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.34426,
+   "T-1h": 0.36358,
+   "T-5m": 0.35945,
+   "T": 0.36014,
+   "T+5m": 0.36037,
+   "T+15m": 0.36029,
+   "T+1h": 0.35918,
+   "T+4h": 0.35735,
+   "T+24h": 0.37699,
+   "T+72h": 0.39656
+  },
+  "trades": {
+   "T-24h": 430,
+   "T-1h": 853,
+   "T-5m": 923,
+   "T": 648,
+   "T+5m": 682,
+   "T+15m": 670,
+   "T+1h": 856,
+   "T+4h": 1212,
+   "T+24h": 591,
+   "T+72h": 10506
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.00838,
+    "net": -0.01128,
+    "btc": -0.000569,
+    "excess_net": -0.010711,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.046119,
+    "net": 0.043219,
+    "btc": 0.026518,
+    "excess_net": 0.016702,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.100425,
+    "net": 0.097525,
+    "btc": 0.067189,
+    "excess_net": 0.030336,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.00816,
+    "net": -0.01106,
+    "btc": -0.001313,
+    "excess_net": -0.009748,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.046352,
+    "net": 0.043452,
+    "btc": 0.025754,
+    "excess_net": 0.017697,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.100669,
+    "net": 0.097769,
+    "btc": 0.066395,
+    "excess_net": 0.031374,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.005095,
+    "net": -0.007995,
+    "btc": 0.000345,
+    "excess_net": -0.00834,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.049585,
+    "net": 0.046685,
+    "btc": 0.027456,
+    "excess_net": 0.019229,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.10407,
+    "net": 0.10117,
+    "btc": 0.068165,
+    "excess_net": 0.033006,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 12139,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.044124,
+   "btc": 0.01729,
+   "excess": 0.026834
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所のみ"
+ },
+ {
+  "event_id": "cc-2025-01-20-DOGE-exch",
+  "venue": "Coincheck",
+  "ticker": "DOGE",
+  "ref": "binance",
+  "ref_symbol": "DOGEUSDT",
+  "announce_utc": "2025-01-20T02:01:12Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.40221,
+   "T-1h": 0.34982,
+   "T-5m": 0.34924,
+   "T": 0.35418,
+   "T+5m": 0.35681,
+   "T+15m": 0.35902,
+   "T+1h": 0.35757,
+   "T+4h": 0.36582,
+   "T+24h": 0.34241,
+   "T+72h": 0.35667
+  },
+  "trades": {
+   "T-24h": 1754,
+   "T-1h": 16615,
+   "T-5m": 3776,
+   "T": 8174,
+   "T+5m": 5395,
+   "T+15m": 5660,
+   "T+1h": 6002,
+   "T+4h": 4205,
+   "T+24h": 5745,
+   "T+72h": 1558
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.025252,
+    "net": 0.022352,
+    "btc": 0.014645,
+    "excess_net": 0.007707,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": -0.040358,
+    "net": -0.043258,
+    "btc": 0.003753,
+    "excess_net": -0.04701,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": -0.000392,
+    "net": -0.003292,
+    "btc": 0.018296,
+    "excess_net": -0.021588,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.01894,
+    "net": 0.01604,
+    "btc": 0.01263,
+    "excess_net": 0.00341,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": -0.046265,
+    "net": -0.049165,
+    "btc": 0.00176,
+    "excess_net": -0.050925,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": -0.006546,
+    "net": -0.009446,
+    "btc": 0.016274,
+    "excess_net": -0.025719,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.023072,
+    "net": 0.020172,
+    "btc": 0.009856,
+    "excess_net": 0.010317,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": -0.042397,
+    "net": -0.045297,
+    "btc": -0.000985,
+    "excess_net": -0.044312,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": -0.002517,
+    "net": -0.005417,
+    "btc": 0.013489,
+    "excess_net": -0.018906,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 81753,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.131697,
+   "btc": -0.040229,
+   "excess": -0.091469
+  },
+  "kind": "new_service_type",
+  "listing_type": "取引所（板）"
+ },
+ {
+  "event_id": "cc-2025-04-07-LSK",
+  "venue": "Coincheck",
+  "ticker": "LSK",
+  "ref": "binance",
+  "ref_symbol": "LSKUSDT",
+  "announce_utc": "2025-04-07T03:03:01Z",
+  "first_in_jp": false,
+  "is_migration": true,
+  "levels": {
+   "T-24h": 0.479,
+   "T-1h": 0.431,
+   "T-5m": 0.428,
+   "T": 0.429,
+   "T+5m": 0.429,
+   "T+15m": 0.428,
+   "T+1h": 0.413,
+   "T+4h": 0.391,
+   "T+24h": 0.435,
+   "T+72h": 0.461
+  },
+  "trades": {
+   "T-24h": 5,
+   "T-1h": 0,
+   "T-5m": 0,
+   "T": 6,
+   "T+5m": 0,
+   "T+15m": 1,
+   "T+1h": 0,
+   "T+4h": 3,
+   "T+24h": 8,
+   "T+72h": 1
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.088578,
+    "net": -0.091478,
+    "btc": -0.046076,
+    "excess_net": -0.045402,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.013986,
+    "net": 0.011086,
+    "btc": 0.02233,
+    "excess_net": -0.011244,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.074592,
+    "net": 0.071692,
+    "btc": 0.048341,
+    "excess_net": 0.023351,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.086449,
+    "net": -0.089349,
+    "btc": -0.047874,
+    "excess_net": -0.041474,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.016355,
+    "net": 0.013455,
+    "btc": 0.020402,
+    "excess_net": -0.006947,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.077103,
+    "net": 0.074203,
+    "btc": 0.046364,
+    "excess_net": 0.027838,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.053269,
+    "net": -0.056169,
+    "btc": -0.039712,
+    "excess_net": -0.016457,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.053269,
+    "net": 0.050369,
+    "btc": 0.02915,
+    "excess_net": 0.021219,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.116223,
+    "net": 0.113323,
+    "btc": 0.055334,
+    "excess_net": 0.057988,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 35,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.106472,
+   "btc": -0.057759,
+   "excess": -0.048713
+  },
+  "kind": "migration",
+  "listing_type": "販売所／取引所"
+ },
+ {
+  "event_id": "cc-2025-04-25-PEPE-MASK-MANA-GRT",
+  "venue": "Coincheck",
+  "ticker": "PEPE",
+  "ref": "binance",
+  "ref_symbol": "PEPEUSDT",
+  "announce_utc": "2025-04-25T07:00:08Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 8.52e-06,
+   "T-1h": 8.7e-06,
+   "T-5m": 8.83e-06,
+   "T": 8.83e-06,
+   "T+5m": 8.86e-06,
+   "T+15m": 8.82e-06,
+   "T+1h": 8.84e-06,
+   "T+4h": 8.85e-06,
+   "T+24h": 9.52e-06,
+   "T+72h": 8.99e-06
+  },
+  "trades": {
+   "T-24h": 262,
+   "T-1h": 149,
+   "T-5m": 249,
+   "T": 187,
+   "T+5m": 404,
+   "T+15m": 255,
+   "T+1h": 203,
+   "T+4h": 323,
+   "T+24h": 242,
+   "T+72h": 233
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.001129,
+    "net": -0.004029,
+    "btc": -0.000228,
+    "excess_net": -0.003801,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.074492,
+    "net": 0.071592,
+    "btc": 0.009735,
+    "excess_net": 0.061857,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.014673,
+    "net": 0.011773,
+    "btc": 0.009936,
+    "excess_net": 0.001837,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.003401,
+    "net": 0.000501,
+    "btc": 0.001244,
+    "excess_net": -0.000743,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.079365,
+    "net": 0.076465,
+    "btc": 0.011222,
+    "excess_net": 0.065243,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.019274,
+    "net": 0.016374,
+    "btc": 0.011423,
+    "excess_net": 0.004951,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.001131,
+    "net": -0.001769,
+    "btc": -0.001495,
+    "excess_net": -0.000274,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.076923,
+    "net": 0.074023,
+    "btc": 0.008456,
+    "excess_net": 0.065568,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.016968,
+    "net": 0.014068,
+    "btc": 0.008656,
+    "excess_net": 0.005412,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 5056,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.036385,
+   "btc": 0.013791,
+   "excess": 0.022594
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）"
+ },
+ {
+  "event_id": "cc-2025-04-25-PEPE-MASK-MANA-GRT",
+  "venue": "Coincheck",
+  "ticker": "MASK",
+  "ref": "binance",
+  "ref_symbol": "MASKUSDT",
+  "announce_utc": "2025-04-25T07:00:08Z",
+  "first_in_jp": true,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 1.172,
+   "T-1h": 1.2,
+   "T-5m": 1.206,
+   "T": 1.208,
+   "T+5m": 1.207,
+   "T+15m": 1.21,
+   "T+1h": 1.215,
+   "T+4h": 1.196,
+   "T+24h": 1.219,
+   "T+72h": 1.211
+  },
+  "trades": {
+   "T-24h": 15,
+   "T-1h": 24,
+   "T-5m": 70,
+   "T": 58,
+   "T+5m": 13,
+   "T+15m": 13,
+   "T+1h": 19,
+   "T+4h": 5,
+   "T+24h": 1,
+   "T+72h": 13
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.009114,
+    "net": -0.012014,
+    "btc": -0.000228,
+    "excess_net": -0.011786,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.009942,
+    "net": 0.007042,
+    "btc": 0.009735,
+    "excess_net": -0.002693,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.003314,
+    "net": 0.000414,
+    "btc": 0.009936,
+    "excess_net": -0.009522,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.01157,
+    "net": -0.01447,
+    "btc": 0.001244,
+    "excess_net": -0.015715,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.007438,
+    "net": 0.004538,
+    "btc": 0.011222,
+    "excess_net": -0.006684,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.000826,
+    "net": -0.002074,
+    "btc": 0.011423,
+    "excess_net": -0.013497,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.015638,
+    "net": -0.018538,
+    "btc": -0.001495,
+    "excess_net": -0.017043,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.003292,
+    "net": 0.000392,
+    "btc": 0.008456,
+    "excess_net": -0.008063,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": -0.003292,
+    "net": -0.006192,
+    "btc": 0.008656,
+    "excess_net": -0.014848,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 226,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.02901,
+   "btc": 0.013791,
+   "excess": 0.015219
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）"
+ },
+ {
+  "event_id": "cc-2025-04-25-PEPE-MASK-MANA-GRT",
+  "venue": "Coincheck",
+  "ticker": "MANA",
+  "ref": "binance",
+  "ref_symbol": "MANAUSDT",
+  "announce_utc": "2025-04-25T07:00:08Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.3079,
+   "T-1h": 0.326,
+   "T-5m": 0.3272,
+   "T": 0.3279,
+   "T+5m": 0.3278,
+   "T+15m": 0.3261,
+   "T+1h": 0.3275,
+   "T+4h": 0.3224,
+   "T+24h": 0.3352,
+   "T+72h": 0.3154
+  },
+  "trades": {
+   "T-24h": 159,
+   "T-1h": 22,
+   "T-5m": 45,
+   "T": 28,
+   "T+5m": 8,
+   "T+15m": 28,
+   "T+1h": 38,
+   "T+4h": 8,
+   "T+24h": 8,
+   "T+72h": 9
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.016473,
+    "net": -0.019373,
+    "btc": -0.000228,
+    "excess_net": -0.019145,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.022575,
+    "net": 0.019675,
+    "btc": 0.009735,
+    "excess_net": 0.00994,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": -0.037828,
+    "net": -0.040728,
+    "btc": 0.009936,
+    "excess_net": -0.050664,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.011346,
+    "net": -0.014246,
+    "btc": 0.001244,
+    "excess_net": -0.015491,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.027906,
+    "net": 0.025006,
+    "btc": 0.011222,
+    "excess_net": 0.013784,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": -0.032812,
+    "net": -0.035712,
+    "btc": 0.011423,
+    "excess_net": -0.047135,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.015573,
+    "net": -0.018473,
+    "btc": -0.001495,
+    "excess_net": -0.016978,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.023511,
+    "net": 0.020611,
+    "btc": 0.008456,
+    "excess_net": 0.012156,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": -0.036947,
+    "net": -0.039847,
+    "btc": 0.008656,
+    "excess_net": -0.048503,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 306,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.062683,
+   "btc": 0.013791,
+   "excess": 0.048891
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）"
+ },
+ {
+  "event_id": "cc-2025-04-25-PEPE-MASK-MANA-GRT",
+  "venue": "Coincheck",
+  "ticker": "GRT",
+  "ref": "binance",
+  "ref_symbol": "GRTUSDT",
+  "announce_utc": "2025-04-25T07:00:08Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.0886,
+   "T-1h": 0.0968,
+   "T-5m": 0.0986,
+   "T": 0.099,
+   "T+5m": 0.0994,
+   "T+15m": 0.0996,
+   "T+1h": 0.1004,
+   "T+4h": 0.1019,
+   "T+24h": 0.1059,
+   "T+72h": 0.0984
+  },
+  "trades": {
+   "T-24h": 3,
+   "T-1h": 96,
+   "T-5m": 97,
+   "T": 85,
+   "T+5m": 61,
+   "T+15m": 103,
+   "T+1h": 73,
+   "T+4h": 13,
+   "T+24h": 56,
+   "T+72h": 34
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.025151,
+    "net": 0.022251,
+    "btc": -0.000228,
+    "excess_net": 0.022479,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.065392,
+    "net": 0.062492,
+    "btc": 0.009735,
+    "excess_net": 0.052758,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": -0.01006,
+    "net": -0.01296,
+    "btc": 0.009936,
+    "excess_net": -0.022896,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.023092,
+    "net": 0.020192,
+    "btc": 0.001244,
+    "excess_net": 0.018948,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.063253,
+    "net": 0.060353,
+    "btc": 0.011222,
+    "excess_net": 0.049131,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": -0.012048,
+    "net": -0.014948,
+    "btc": 0.011423,
+    "excess_net": -0.026371,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.01494,
+    "net": 0.01204,
+    "btc": -0.001495,
+    "excess_net": 0.013535,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.054781,
+    "net": 0.051881,
+    "btc": 0.008456,
+    "excess_net": 0.043425,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": -0.01992,
+    "net": -0.02282,
+    "btc": 0.008656,
+    "excess_net": -0.031477,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 1101,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.112867,
+   "btc": 0.013791,
+   "excess": 0.099076
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）"
+ },
+ {
+  "event_id": "cc-2025-12-11-SOL",
+  "venue": "Coincheck",
+  "ticker": "SOL",
+  "ref": "binance",
+  "ref_symbol": "SOLUSDT",
+  "announce_utc": "2025-12-11T06:55:49Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 139.13,
+   "T-1h": 131.17,
+   "T-5m": 130.98,
+   "T": 130.96,
+   "T+5m": 131.1,
+   "T+15m": 131.15,
+   "T+1h": 130.96,
+   "T+4h": 130.71,
+   "T+24h": 139.04,
+   "T+72h": 132.91
+  },
+  "trades": {
+   "T-24h": 776,
+   "T-1h": 777,
+   "T-5m": 929,
+   "T": 926,
+   "T+5m": 1122,
+   "T+15m": 599,
+   "T+1h": 723,
+   "T+4h": 833,
+   "T+24h": 668,
+   "T+72h": 222
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.002975,
+    "net": -0.005875,
+    "btc": -0.000258,
+    "excess_net": -0.005617,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.060564,
+    "net": 0.057664,
+    "btc": 0.02434,
+    "excess_net": 0.033324,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.013806,
+    "net": 0.010906,
+    "btc": -0.001856,
+    "excess_net": 0.012763,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.003355,
+    "net": -0.006255,
+    "btc": 0.00104,
+    "excess_net": -0.007295,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.06016,
+    "net": 0.05726,
+    "btc": 0.025669,
+    "excess_net": 0.031591,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.01342,
+    "net": 0.01052,
+    "btc": -0.000561,
+    "excess_net": 0.011081,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.001909,
+    "net": -0.004809,
+    "btc": 0.000778,
+    "excess_net": -0.005587,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.061698,
+    "net": 0.058798,
+    "btc": 0.025401,
+    "excess_net": 0.033397,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.01489,
+    "net": 0.01199,
+    "btc": -0.000822,
+    "excess_net": 0.012813,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 11626,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.058578,
+   "btc": -0.026296,
+   "excess": -0.032282
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）"
+ },
+ {
+  "event_id": "cc-2026-01-29-TRX",
+  "venue": "Coincheck",
+  "ticker": "TRX",
+  "ref": "binance",
+  "ref_symbol": "TRXUSDT",
+  "announce_utc": "2026-01-29T04:44:57Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.2934,
+   "T-1h": 0.2947,
+   "T-5m": 0.2945,
+   "T": 0.2946,
+   "T+5m": 0.2947,
+   "T+15m": 0.2948,
+   "T+1h": 0.2951,
+   "T+4h": 0.2944,
+   "T+24h": 0.2928,
+   "T+72h": 0.2867
+  },
+  "trades": {
+   "T-24h": 27,
+   "T-1h": 24,
+   "T-5m": 30,
+   "T": 21,
+   "T+5m": 32,
+   "T+15m": 19,
+   "T+1h": 23,
+   "T+4h": 39,
+   "T+24h": 28,
+   "T+72h": 26
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.001018,
+    "net": -0.003918,
+    "btc": -0.00124,
+    "excess_net": -0.002678,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": -0.006447,
+    "net": -0.009347,
+    "btc": -0.060261,
+    "excess_net": 0.050914,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": -0.027146,
+    "net": -0.030046,
+    "btc": -0.104512,
+    "excess_net": 0.074466,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.001357,
+    "net": -0.004257,
+    "btc": -0.002151,
+    "excess_net": -0.002105,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": -0.006784,
+    "net": -0.009684,
+    "btc": -0.061119,
+    "excess_net": 0.051435,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": -0.027476,
+    "net": -0.030376,
+    "btc": -0.10533,
+    "excess_net": 0.074953,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": -0.002372,
+    "net": -0.005272,
+    "btc": -0.002069,
+    "excess_net": -0.003204,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": -0.007794,
+    "net": -0.010694,
+    "btc": -0.061041,
+    "excess_net": 0.050347,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": -0.028465,
+    "net": -0.031365,
+    "btc": -0.105255,
+    "excess_net": 0.07389,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 513,
+  "pre_T-24h_to_T-5m": {
+   "gross": 0.003749,
+   "btc": -0.009084,
+   "excess": 0.012833
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）"
+ },
+ {
+  "event_id": "cc-2026-04-23-SUI",
+  "venue": "Coincheck",
+  "ticker": "SUI",
+  "ref": "binance",
+  "ref_symbol": "SUIUSDT",
+  "announce_utc": "2026-04-23T03:02:02Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 0.9628,
+   "T-1h": 0.9416,
+   "T-5m": 0.9351,
+   "T": 0.9369,
+   "T+5m": 0.9355,
+   "T+15m": 0.9331,
+   "T+1h": 0.9329,
+   "T+4h": 0.9429,
+   "T+24h": 0.9485,
+   "T+72h": 0.9355
+  },
+  "trades": {
+   "T-24h": 400,
+   "T-1h": 120,
+   "T-5m": 84,
+   "T": 168,
+   "T+5m": 114,
+   "T+15m": 99,
+   "T+1h": 201,
+   "T+4h": 97,
+   "T+24h": 84,
+   "T+72h": 49
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": 0.00791,
+    "net": 0.00501,
+    "btc": 0.003986,
+    "excess_net": 0.001024,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": 0.013896,
+    "net": 0.010996,
+    "btc": 0.003357,
+    "excess_net": 0.00764,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": 0.0,
+    "net": -0.0029,
+    "btc": -0.004912,
+    "excess_net": 0.002012,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": 0.010503,
+    "net": 0.007603,
+    "btc": 0.006248,
+    "excess_net": 0.001354,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": 0.016504,
+    "net": 0.013604,
+    "btc": 0.005617,
+    "excess_net": 0.007987,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": 0.002572,
+    "net": -0.000328,
+    "btc": -0.00267,
+    "excess_net": 0.002342,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.010719,
+    "net": 0.007819,
+    "btc": 0.006335,
+    "excess_net": 0.001484,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": 0.016722,
+    "net": 0.013822,
+    "btc": 0.005704,
+    "excess_net": 0.008118,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": 0.002787,
+    "net": -0.000113,
+    "btc": -0.002584,
+    "excess_net": 0.002471,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 2332,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.02877,
+   "btc": 0.004217,
+   "excess": -0.032987
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）"
+ },
+ {
+  "event_id": "gmo-2026-01-15-SUI",
+  "venue": "GMOコイン",
+  "ticker": "SUI",
+  "ref": "binance",
+  "ref_symbol": "SUIUSDT",
+  "announce_utc": "2026-01-15T02:25:36Z",
+  "first_in_jp": false,
+  "is_migration": false,
+  "levels": {
+   "T-24h": 1.8727,
+   "T-1h": 1.8394,
+   "T-5m": 1.8233,
+   "T": 1.8247,
+   "T+5m": 1.8272,
+   "T+15m": 1.8107,
+   "T+1h": 1.7898,
+   "T+4h": 1.8061,
+   "T+24h": 1.781,
+   "T+72h": 1.7772
+  },
+  "trades": {
+   "T-24h": 228,
+   "T-1h": 174,
+   "T-5m": 214,
+   "T": 214,
+   "T+5m": 155,
+   "T+15m": 264,
+   "T+1h": 841,
+   "T+4h": 53,
+   "T+24h": 164,
+   "T+72h": 53
+  },
+  "returns": {
+   "T+5m->T+4h": {
+    "gross": -0.011548,
+    "net": -0.014448,
+    "btc": 6e-06,
+    "excess_net": -0.014454,
+    "exit_offset_s": 14400
+   },
+   "T+5m->T+24h": {
+    "gross": -0.025285,
+    "net": -0.028185,
+    "btc": -0.010925,
+    "excess_net": -0.01726,
+    "exit_offset_s": 86400
+   },
+   "T+5m->T+72h": {
+    "gross": -0.027364,
+    "net": -0.030264,
+    "btc": -0.015731,
+    "excess_net": -0.014534,
+    "exit_offset_s": 259200
+   },
+   "T+15m->T+4h": {
+    "gross": -0.00254,
+    "net": -0.00544,
+    "btc": 0.002594,
+    "excess_net": -0.008035,
+    "exit_offset_s": 14400
+   },
+   "T+15m->T+24h": {
+    "gross": -0.016402,
+    "net": -0.019302,
+    "btc": -0.008365,
+    "excess_net": -0.010938,
+    "exit_offset_s": 86400
+   },
+   "T+15m->T+72h": {
+    "gross": -0.018501,
+    "net": -0.021401,
+    "btc": -0.013183,
+    "excess_net": -0.008218,
+    "exit_offset_s": 259200
+   },
+   "T+1h->T+4h": {
+    "gross": 0.009107,
+    "net": 0.006207,
+    "btc": 0.004013,
+    "excess_net": 0.002194,
+    "exit_offset_s": 14400
+   },
+   "T+1h->T+24h": {
+    "gross": -0.004917,
+    "net": -0.007817,
+    "btc": -0.006961,
+    "excess_net": -0.000855,
+    "exit_offset_s": 86400
+   },
+   "T+1h->T+72h": {
+    "gross": -0.00704,
+    "net": -0.00994,
+    "btc": -0.011787,
+    "excess_net": 0.001847,
+    "exit_offset_s": 259200
+   }
+  },
+  "flags": [],
+  "coverage_T-1h_T+4h": 1.0,
+  "trades_T_to_T+15m": 8226,
+  "pre_T-24h_to_T-5m": {
+   "gross": -0.026379,
+   "btc": 0.011728,
+   "excess": -0.038107
+  },
+  "kind": "new_listing",
+  "listing_type": "販売所＋取引所（板）＋つみたて"
+ }
+]

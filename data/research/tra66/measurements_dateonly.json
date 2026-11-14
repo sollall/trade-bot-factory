@@ -1,0 +1,1017 @@
+[
+ {
+  "event_id": "gmo-2026-10-29-MNT-BNB",
+  "venue": "GMOコイン",
+  "ticker": "MNT",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-10-29",
+  "time_precision": "hour",
+  "first_in_jp": true,
+  "ref": "hyperliquid",
+  "ref_symbol": "MNT",
+  "day0_00to24JST": {
+   "gross": 0.001986,
+   "net": -0.000914,
+   "btc": 0.007841,
+   "excess_net": -0.008755
+  },
+  "pre_day": {
+   "gross": -0.032619,
+   "net": -0.035519,
+   "btc": 0.002223,
+   "excess_net": -0.037742
+  },
+  "endday->+1d": {
+   "gross": -0.064649,
+   "net": -0.067549,
+   "btc": -0.048738,
+   "excess_net": -0.018811
+  },
+  "endday->+3d": {
+   "gross": -0.056543,
+   "net": -0.059443,
+   "btc": -0.039936,
+   "excess_net": -0.019507
+  }
+ },
+ {
+  "event_id": "gmo-2026-10-29-MNT-BNB",
+  "venue": "GMOコイン",
+  "ticker": "BNB",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-10-29",
+  "time_precision": "hour",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "BNBUSDT",
+  "day0_00to24JST": {
+   "gross": -0.001107,
+   "net": -0.004007,
+   "btc": 0.007841,
+   "excess_net": -0.011848
+  },
+  "pre_day": {
+   "gross": 0.00581,
+   "net": 0.00291,
+   "btc": 0.002223,
+   "excess_net": 0.000688
+  },
+  "endday->+1d": {
+   "gross": -0.065538,
+   "net": -0.068438,
+   "btc": -0.048738,
+   "excess_net": -0.019699
+  },
+  "endday->+3d": {
+   "gross": -0.042726,
+   "net": -0.045626,
+   "btc": -0.039936,
+   "excess_net": -0.00569
+  }
+ },
+ {
+  "event_id": "bf-2025-01-28-PEPE",
+  "venue": "bitFlyer",
+  "ticker": "PEPE",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-01-28",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "PEPEUSDT",
+  "day0_00to24JST": {
+   "gross": -0.008494,
+   "net": -0.011394,
+   "btc": 0.008814,
+   "excess_net": -0.020209
+  },
+  "pre_day": {
+   "gross": -0.132619,
+   "net": -0.135519,
+   "btc": -0.028989,
+   "excess_net": -0.10653
+  },
+  "endday->+1d": {
+   "gross": -0.042835,
+   "net": -0.045735,
+   "btc": -0.007104,
+   "excess_net": -0.038631
+  },
+  "endday->+3d": {
+   "gross": 0.103583,
+   "net": 0.100683,
+   "btc": 0.017148,
+   "excess_net": 0.083534
+  }
+ },
+ {
+  "event_id": "bf-2026-06-15-SOL",
+  "venue": "bitFlyer",
+  "ticker": "SOL",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-06-15",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "SOLUSDT",
+  "day0_00to24JST": {
+   "gross": 0.096157,
+   "net": 0.093257,
+   "btc": 0.039974,
+   "excess_net": 0.053283
+  },
+  "pre_day": {
+   "gross": -0.012167,
+   "net": -0.015067,
+   "btc": -0.001937,
+   "excess_net": -0.013129
+  },
+  "endday->+1d": {
+   "gross": -0.012319,
+   "net": -0.015219,
+   "btc": -0.014742,
+   "excess_net": -0.000477
+  },
+  "endday->+3d": {
+   "gross": -0.039664,
+   "net": -0.042564,
+   "btc": -0.043564,
+   "excess_net": 0.001
+  }
+ },
+ {
+  "event_id": "bf-2026-07-13-TRX-ATOM-XDC",
+  "venue": "bitFlyer",
+  "ticker": "TRX",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-07-13",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "TRXUSDT",
+  "day0_00to24JST": {
+   "gross": -0.015672,
+   "net": -0.018572,
+   "btc": -0.021259,
+   "excess_net": 0.002687
+  },
+  "pre_day": {
+   "gross": 0.000301,
+   "net": -0.002599,
+   "btc": -0.003055,
+   "excess_net": 0.000456
+  },
+  "endday->+1d": {
+   "gross": -0.002143,
+   "net": -0.005043,
+   "btc": 0.023133,
+   "excess_net": -0.028177
+  },
+  "endday->+3d": {
+   "gross": -0.009492,
+   "net": -0.012392,
+   "btc": 0.027325,
+   "excess_net": -0.039717
+  }
+ },
+ {
+  "event_id": "bf-2026-07-13-TRX-ATOM-XDC",
+  "venue": "bitFlyer",
+  "ticker": "ATOM",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-07-13",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "ATOMUSDT",
+  "day0_00to24JST": {
+   "gross": -0.025141,
+   "net": -0.028041,
+   "btc": -0.021259,
+   "excess_net": -0.006782
+  },
+  "pre_day": {
+   "gross": -0.001255,
+   "net": -0.004155,
+   "btc": -0.003055,
+   "excess_net": -0.001101
+  },
+  "endday->+1d": {
+   "gross": 0.007737,
+   "net": 0.004837,
+   "btc": 0.023133,
+   "excess_net": -0.018296
+  },
+  "endday->+3d": {
+   "gross": -0.014184,
+   "net": -0.017084,
+   "btc": 0.027325,
+   "excess_net": -0.044409
+  }
+ },
+ {
+  "event_id": "bf-2026-09-16-TRX-GRAM-ATOM-XDC",
+  "venue": "bitFlyer",
+  "ticker": "TRX",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-09-16",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "TRXUSDT",
+  "day0_00to24JST": {
+   "gross": -0.005645,
+   "net": -0.008545,
+   "btc": -0.001656,
+   "excess_net": -0.006889
+  },
+  "pre_day": {
+   "gross": -0.012903,
+   "net": -0.015803,
+   "btc": -0.033124,
+   "excess_net": 0.017321
+  },
+  "endday->+1d": {
+   "gross": -0.000299,
+   "net": -0.003199,
+   "btc": 0.009879,
+   "excess_net": -0.013078
+  },
+  "endday->+3d": {
+   "gross": 0.009262,
+   "net": 0.006362,
+   "btc": 0.077537,
+   "excess_net": -0.071175
+  }
+ },
+ {
+  "event_id": "bf-2026-09-16-TRX-GRAM-ATOM-XDC",
+  "venue": "bitFlyer",
+  "ticker": "GRAM",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-09-16",
+  "time_precision": "date",
+  "first_in_jp": true,
+  "ref": "binance",
+  "ref_symbol": "GRAMUSDT",
+  "day0_00to24JST": {
+   "gross": -0.010582,
+   "net": -0.013482,
+   "btc": -0.001656,
+   "excess_net": -0.011826
+  },
+  "pre_day": {
+   "gross": -0.024336,
+   "net": -0.027236,
+   "btc": -0.033124,
+   "excess_net": 0.005888
+  },
+  "endday->+1d": {
+   "gross": 0.025974,
+   "net": 0.023074,
+   "btc": 0.009879,
+   "excess_net": 0.013195
+  },
+  "endday->+3d": {
+   "gross": 0.061115,
+   "net": 0.058215,
+   "btc": 0.077537,
+   "excess_net": -0.019322
+  }
+ },
+ {
+  "event_id": "bf-2026-09-16-TRX-GRAM-ATOM-XDC",
+  "venue": "bitFlyer",
+  "ticker": "ATOM",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-09-16",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "ATOMUSDT",
+  "day0_00to24JST": {
+   "gross": -0.038163,
+   "net": -0.041063,
+   "btc": -0.001656,
+   "excess_net": -0.039407
+  },
+  "pre_day": {
+   "gross": 0.003245,
+   "net": 0.000345,
+   "btc": -0.033124,
+   "excess_net": 0.033469
+  },
+  "endday->+1d": {
+   "gross": 0.032952,
+   "net": 0.030052,
+   "btc": 0.009879,
+   "excess_net": 0.020173
+  },
+  "endday->+3d": {
+   "gross": 0.166106,
+   "net": 0.163206,
+   "btc": 0.077537,
+   "excess_net": 0.085669
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "ALGO",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "ALGOUSDT",
+  "day0_00to24JST": {
+   "gross": -0.044191,
+   "net": -0.047091,
+   "btc": -0.016351,
+   "excess_net": -0.030741
+  },
+  "pre_day": {
+   "gross": 0.029645,
+   "net": 0.026745,
+   "btc": -0.003115,
+   "excess_net": 0.02986
+  },
+  "endday->+1d": {
+   "gross": 0.005254,
+   "net": 0.002354,
+   "btc": 0.003363,
+   "excess_net": -0.001009
+  },
+  "endday->+3d": {
+   "gross": 0.01331,
+   "net": 0.01041,
+   "btc": 0.02269,
+   "excess_net": -0.01228
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "APE",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "APEUSDT",
+  "day0_00to24JST": {
+   "gross": -0.035665,
+   "net": -0.038565,
+   "btc": -0.016351,
+   "excess_net": -0.022215
+  },
+  "pre_day": {
+   "gross": 0.032578,
+   "net": 0.029678,
+   "btc": -0.003115,
+   "excess_net": 0.032793
+  },
+  "endday->+1d": {
+   "gross": 0.035562,
+   "net": 0.032662,
+   "btc": 0.003363,
+   "excess_net": 0.029299
+  },
+  "endday->+3d": {
+   "gross": 0.021337,
+   "net": 0.018437,
+   "btc": 0.02269,
+   "excess_net": -0.004253
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "AXS",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "AXSUSDT",
+  "day0_00to24JST": {
+   "gross": -0.00946,
+   "net": -0.01236,
+   "btc": -0.016351,
+   "excess_net": 0.003991
+  },
+  "pre_day": {
+   "gross": 0.012617,
+   "net": 0.009717,
+   "btc": -0.003115,
+   "excess_net": 0.012832
+  },
+  "endday->+1d": {
+   "gross": 0.002795,
+   "net": -0.000105,
+   "btc": 0.003363,
+   "excess_net": -0.003468
+  },
+  "endday->+3d": {
+   "gross": 0.030981,
+   "net": 0.028081,
+   "btc": 0.02269,
+   "excess_net": 0.00539
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "BAT",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "BATUSDT",
+  "day0_00to24JST": {
+   "gross": -0.014177,
+   "net": -0.017077,
+   "btc": -0.016351,
+   "excess_net": -0.000726
+  },
+  "pre_day": {
+   "gross": 0.017194,
+   "net": 0.014294,
+   "btc": -0.003115,
+   "excess_net": 0.017408
+  },
+  "endday->+1d": {
+   "gross": 0.013274,
+   "net": 0.010374,
+   "btc": 0.003363,
+   "excess_net": 0.007012
+  },
+  "endday->+3d": {
+   "gross": 0.028208,
+   "net": 0.025308,
+   "btc": 0.02269,
+   "excess_net": 0.002617
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "CHZ",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "CHZUSDT",
+  "day0_00to24JST": {
+   "gross": 0.003344,
+   "net": 0.000444,
+   "btc": -0.016351,
+   "excess_net": 0.016795
+  },
+  "pre_day": {
+   "gross": 0.005042,
+   "net": 0.002142,
+   "btc": -0.003115,
+   "excess_net": 0.005257
+  },
+  "endday->+1d": {
+   "gross": 0.013333,
+   "net": 0.010433,
+   "btc": 0.003363,
+   "excess_net": 0.007071
+  },
+  "endday->+3d": {
+   "gross": -0.003333,
+   "net": -0.006233,
+   "btc": 0.02269,
+   "excess_net": -0.028924
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "ENJ",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "ENJUSDT",
+  "day0_00to24JST": {
+   "gross": -0.043755,
+   "net": -0.046655,
+   "btc": -0.016351,
+   "excess_net": -0.030304
+  },
+  "pre_day": {
+   "gross": 0.048374,
+   "net": 0.045474,
+   "btc": -0.003115,
+   "excess_net": 0.048588
+  },
+  "endday->+1d": {
+   "gross": 0.026622,
+   "net": 0.023722,
+   "btc": 0.003363,
+   "excess_net": 0.020359
+  },
+  "endday->+3d": {
+   "gross": 0.036606,
+   "net": 0.033706,
+   "btc": 0.02269,
+   "excess_net": 0.011015
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "ETC",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "ETCUSDT",
+  "day0_00to24JST": {
+   "gross": -0.026328,
+   "net": -0.029228,
+   "btc": -0.016351,
+   "excess_net": -0.012878
+  },
+  "pre_day": {
+   "gross": 0.014078,
+   "net": 0.011178,
+   "btc": -0.003115,
+   "excess_net": 0.014292
+  },
+  "endday->+1d": {
+   "gross": 0.02704,
+   "net": 0.02414,
+   "btc": 0.003363,
+   "excess_net": 0.020778
+  },
+  "endday->+3d": {
+   "gross": 0.030973,
+   "net": 0.028073,
+   "btc": 0.02269,
+   "excess_net": 0.005383
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "SAND",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "SANDUSDT",
+  "day0_00to24JST": {
+   "gross": -0.047976,
+   "net": -0.050876,
+   "btc": -0.016351,
+   "excess_net": -0.034525
+  },
+  "pre_day": {
+   "gross": 0.016252,
+   "net": 0.013352,
+   "btc": -0.003115,
+   "excess_net": 0.016467
+  },
+  "endday->+1d": {
+   "gross": 0.01916,
+   "net": 0.01626,
+   "btc": 0.003363,
+   "excess_net": 0.012897
+  },
+  "endday->+3d": {
+   "gross": 0.047769,
+   "net": 0.044869,
+   "btc": 0.02269,
+   "excess_net": 0.022179
+  }
+ },
+ {
+  "event_id": "sbivc-2025-02-12-14coins",
+  "venue": "SBI VCトレード",
+  "ticker": "TRX",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-12",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "TRXUSDT",
+  "day0_00to24JST": {
+   "gross": -0.014676,
+   "net": -0.017576,
+   "btc": -0.016351,
+   "excess_net": -0.001225
+  },
+  "pre_day": {
+   "gross": 0.030672,
+   "net": 0.027772,
+   "btc": -0.003115,
+   "excess_net": 0.030887
+  },
+  "endday->+1d": {
+   "gross": -0.026479,
+   "net": -0.029379,
+   "btc": 0.003363,
+   "excess_net": -0.032742
+  },
+  "endday->+3d": {
+   "gross": -0.019859,
+   "net": -0.022759,
+   "btc": 0.02269,
+   "excess_net": -0.04545
+  }
+ },
+ {
+  "event_id": "sbivc-2025-03-25-USDC",
+  "venue": "SBI VCトレード",
+  "ticker": "USDC",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-03-25",
+  "time_precision": "date",
+  "first_in_jp": true,
+  "ref": "binance",
+  "ref_symbol": "USDCUSDT",
+  "day0_00to24JST": {
+   "gross": -0.0001,
+   "net": -0.003,
+   "btc": 0.00153,
+   "excess_net": -0.00453
+  },
+  "pre_day": {
+   "gross": -0.0003,
+   "net": -0.0032,
+   "btc": 0.03521,
+   "excess_net": -0.03841
+  },
+  "endday->+1d": {
+   "gross": 0.0001,
+   "net": -0.0028,
+   "btc": -0.013517,
+   "excess_net": 0.010717
+  },
+  "endday->+3d": {
+   "gross": 0.0006,
+   "net": -0.0023,
+   "btc": -0.04424,
+   "excess_net": 0.041941
+  }
+ },
+ {
+  "event_id": "sbivc-2026-03-11-TON-SUI",
+  "venue": "SBI VCトレード",
+  "ticker": "TON",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-03-11",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "hyperliquid",
+  "ref_symbol": "TON",
+  "day0_00to24JST": {
+   "gross": -0.027185,
+   "net": -0.030085,
+   "btc": -0.012237,
+   "excess_net": -0.017848
+  },
+  "pre_day": {
+   "gross": -0.003764,
+   "net": -0.006664,
+   "btc": 0.033575,
+   "excess_net": -0.040238
+  },
+  "endday->+1d": {
+   "gross": -0.001371,
+   "net": -0.004271,
+   "btc": -0.015176,
+   "excess_net": 0.010906
+  },
+  "endday->+3d": {
+   "gross": -0.008985,
+   "net": -0.011885,
+   "btc": -0.000501,
+   "excess_net": -0.011384
+  }
+ },
+ {
+  "event_id": "sbivc-2026-03-11-TON-SUI",
+  "venue": "SBI VCトレード",
+  "ticker": "SUI",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-03-11",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "SUIUSDT",
+  "day0_00to24JST": {
+   "gross": -0.029733,
+   "net": -0.032633,
+   "btc": -0.012237,
+   "excess_net": -0.020396
+  },
+  "pre_day": {
+   "gross": 0.080477,
+   "net": 0.077577,
+   "btc": 0.033575,
+   "excess_net": 0.044003
+  },
+  "endday->+1d": {
+   "gross": -0.008712,
+   "net": -0.011612,
+   "btc": -0.015176,
+   "excess_net": 0.003565
+  },
+  "endday->+3d": {
+   "gross": 0.008609,
+   "net": 0.005709,
+   "btc": -0.000501,
+   "excess_net": 0.00621
+  }
+ },
+ {
+  "event_id": "sbivc-2026-06-24-RLUSD-JPYSC",
+  "venue": "SBI VCトレード",
+  "ticker": "RLUSD",
+  "kind": "new_listing",
+  "announce_date_jst": "2026-06-24",
+  "time_precision": "date",
+  "first_in_jp": true,
+  "ref": "binance",
+  "ref_symbol": "RLUSDUSDT",
+  "day0_00to24JST": {
+   "gross": 0.0002,
+   "net": -0.0027,
+   "btc": -0.021528,
+   "excess_net": 0.018828
+  },
+  "pre_day": {
+   "gross": 0.0001,
+   "net": -0.0028,
+   "btc": -0.039716,
+   "excess_net": 0.036916
+  },
+  "endday->+1d": {
+   "gross": -0.0001,
+   "net": -0.003,
+   "btc": -0.02768,
+   "excess_net": 0.02468
+  },
+  "endday->+3d": {
+   "gross": 0.0001,
+   "net": -0.0028,
+   "btc": -0.007768,
+   "excess_net": 0.004967
+  }
+ },
+ {
+  "event_id": "bp-2024-12-25-BNB",
+  "venue": "BITPOINT",
+  "ticker": "BNB",
+  "kind": "new_listing",
+  "announce_date_jst": "2024-12-25",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "BNBUSDT",
+  "day0_00to24JST": {
+   "gross": 0.022293,
+   "net": 0.019393,
+   "btc": 0.013486,
+   "excess_net": 0.005907
+  },
+  "pre_day": {
+   "gross": 0.024464,
+   "net": 0.021564,
+   "btc": 0.034432,
+   "excess_net": -0.012868
+  },
+  "endday->+1d": {
+   "gross": -0.024982,
+   "net": -0.027882,
+   "btc": -0.032416,
+   "excess_net": 0.004533
+  },
+  "endday->+3d": {
+   "gross": 0.019944,
+   "net": 0.017044,
+   "btc": -0.041352,
+   "excess_net": 0.058395
+  }
+ },
+ {
+  "event_id": "bp-2025-02-20-HBAR",
+  "venue": "BITPOINT",
+  "ticker": "HBAR",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-02-20",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "HBARUSDT",
+  "day0_00to24JST": {
+   "gross": 0.034231,
+   "net": 0.031331,
+   "btc": 0.012481,
+   "excess_net": 0.01885
+  },
+  "pre_day": {
+   "gross": 0.034579,
+   "net": 0.031679,
+   "btc": 0.003236,
+   "excess_net": 0.028444
+  },
+  "endday->+1d": {
+   "gross": 0.031675,
+   "net": 0.028775,
+   "btc": 0.018209,
+   "excess_net": 0.010565
+  },
+  "endday->+3d": {
+   "gross": -0.040121,
+   "net": -0.043021,
+   "btc": -0.01445,
+   "excess_net": -0.028572
+  }
+ },
+ {
+  "event_id": "bp-2025-06-13-TRUMP",
+  "venue": "BITPOINT",
+  "ticker": "TRUMP",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-06-13",
+  "time_precision": "date",
+  "first_in_jp": true,
+  "ref": "binance",
+  "ref_symbol": "TRUMPUSDT",
+  "day0_00to24JST": {
+   "gross": -0.046065,
+   "net": -0.048965,
+   "btc": -0.024076,
+   "excess_net": -0.024889
+  },
+  "pre_day": {
+   "gross": -0.058717,
+   "net": -0.061617,
+   "btc": -0.020516,
+   "excess_net": -0.041101
+  },
+  "endday->+1d": {
+   "gross": 0.041247,
+   "net": 0.038347,
+   "btc": -0.001375,
+   "excess_net": 0.039723
+  },
+  "endday->+3d": {
+   "gross": 0.009054,
+   "net": 0.006154,
+   "btc": 0.023607,
+   "excess_net": -0.017453
+  }
+ },
+ {
+  "event_id": "bp-2025-07-30-XLM",
+  "venue": "BITPOINT",
+  "ticker": "XLM",
+  "kind": "new_listing",
+  "announce_date_jst": "2025-07-30",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "XLMUSDT",
+  "day0_00to24JST": {
+   "gross": -0.001677,
+   "net": -0.004577,
+   "btc": 0.007984,
+   "excess_net": -0.012561
+  },
+  "pre_day": {
+   "gross": -0.019953,
+   "net": -0.022853,
+   "btc": -0.001472,
+   "excess_net": -0.021381
+  },
+  "endday->+1d": {
+   "gross": -0.022313,
+   "net": -0.025213,
+   "btc": -0.00585,
+   "excess_net": -0.019363
+  },
+  "endday->+3d": {
+   "gross": -0.101727,
+   "net": -0.104627,
+   "btc": -0.046387,
+   "excess_net": -0.058241
+  }
+ },
+ {
+  "event_id": "bp-2024-12-27-PEPE-pro",
+  "venue": "BITPOINT",
+  "ticker": "PEPE",
+  "kind": "new_service_type",
+  "announce_date_jst": "2024-12-27",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "PEPEUSDT",
+  "day0_00to24JST": {
+   "gross": 0.023686,
+   "net": 0.020786,
+   "btc": 0.000916,
+   "excess_net": 0.019869
+  },
+  "pre_day": {
+   "gross": -0.085578,
+   "net": -0.088478,
+   "btc": -0.032416,
+   "excess_net": -0.056063
+  },
+  "endday->+1d": {
+   "gross": 0.045147,
+   "net": 0.042247,
+   "btc": -0.010142,
+   "excess_net": 0.052389
+  },
+  "endday->+3d": {
+   "gross": -0.002257,
+   "net": -0.005157,
+   "btc": -0.037894,
+   "excess_net": 0.032736
+  }
+ },
+ {
+  "event_id": "bp-2025-02-20-ATOM-TSUGT-pro",
+  "venue": "BITPOINT",
+  "ticker": "ATOM",
+  "kind": "new_service_type",
+  "announce_date_jst": "2025-02-20",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "ATOMUSDT",
+  "day0_00to24JST": {
+   "gross": 0.051082,
+   "net": 0.048182,
+   "btc": 0.012481,
+   "excess_net": 0.035702
+  },
+  "pre_day": {
+   "gross": 0.007414,
+   "net": 0.004514,
+   "btc": 0.003236,
+   "excess_net": 0.001278
+  },
+  "endday->+1d": {
+   "gross": 0.037891,
+   "net": 0.034991,
+   "btc": 0.018209,
+   "excess_net": 0.016782
+  },
+  "endday->+3d": {
+   "gross": 0.010502,
+   "net": 0.007602,
+   "btc": -0.01445,
+   "excess_net": 0.022052
+  }
+ },
+ {
+  "event_id": "bp-2025-08-27-TRUMP-pro",
+  "venue": "BITPOINT",
+  "ticker": "TRUMP",
+  "kind": "new_service_type",
+  "announce_date_jst": "2025-08-27",
+  "time_precision": "date",
+  "first_in_jp": false,
+  "ref": "binance",
+  "ref_symbol": "TRUMPUSDT",
+  "day0_00to24JST": {
+   "gross": 0.009547,
+   "net": 0.006647,
+   "btc": 0.013024,
+   "excess_net": -0.006378
+  },
+  "pre_day": {
+   "gross": -0.008284,
+   "net": -0.011184,
+   "btc": -0.017313,
+   "excess_net": 0.006129
+  },
+  "endday->+1d": {
+   "gross": 0.022459,
+   "net": 0.019559,
+   "btc": 0.012029,
+   "excess_net": 0.007529
+  },
+  "endday->+3d": {
+   "gross": -0.010638,
+   "net": -0.013538,
+   "btc": -0.028192,
+   "excess_net": 0.014654
+  }
+ }
+]
