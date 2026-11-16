@@ -64,7 +64,14 @@ async def main(argv: list[str]) -> int:
         first = row[0]["t"] if row and row[0]["t"] is not None else until
         since = max(first, until - int(a.days * DAY_MS))
         data = load(store, declared.PAIRS, since, until)
-        m = run_all(data, since, until, cfg.book_poll_sec, hedge_delay_ms(store, since, until))
+        m = run_all(
+            data,
+            since,
+            until,
+            cfg.book_poll_sec,
+            hedge_delay_ms(store, since, until),
+            hl_poll_sec=cfg.hl_poll_sec,
+        )
         text = build_report(store, m)
         if a.out:
             open(a.out, "w").write(text + "\n")

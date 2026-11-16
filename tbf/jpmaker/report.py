@@ -289,6 +289,26 @@ def section_hedge(m: Measurement) -> str:
 
 
 # --- 5. 稼働性 ---
+def _gap_lines(label: str, times: list[int], since: int, until: int, poll_sec: float) -> list[str]:
+    """記録の穴を 1 会場ぶん列挙する。60 秒以上は 1 件ずつ、それ未満は件数と合計だけ。"""
+    cov, n = coverage(times, since, until, poll_sec)
+    gaps = [(a, b, (b - a) / 1000.0) for a, b in zip(times, times[1:]) if (b - a) / 1000.0 > poll_sec * 3]
+    long_gaps = [g for g in gaps if g[2] >= GAP_LIST_THRESHOLD_SEC]
+    short = [g for g in gaps if g[2] < GAP_LIST_THRESHOLD_SEC]
+    out = [
+        f"{label:<18} 標本 {n:>7}  カバレッジ {cov * 100:5.1f}%  穴 {len(gaps)} 件 "
+        f"(合計 {sum(g[2] for g in gaps) / 60:.1f} 分)"
+    ]
+    for a, b, s in sorted(long_gaps, key=lambda g: -g[2]):
+        out.append(f"            未測定: {_ts(a)} -> {_ts(b)} ({s / 60:.1f} 分)")
+    if short:
+        out.append(
+            f"            60 秒未満の穴 {len(short)} 件 (合計 {sum(g[2] for g in short) / 60:.1f} 分, "
+            f"最長 {max(g[2] for g in short):.0f} 秒) — 個別には列挙しない"
+        )
+    return out
+
+
 def section_uptime(store: JpMakerStore, m: Measurement) -> str:
     out = ["== 5. 稼働性"]
     out.append("会場         エンドポイント   取得数  エラー  429  レイテンシ p50   p95")
@@ -311,27 +331,16 @@ def section_uptime(store: JpMakerStore, m: Measurement) -> str:
             f"{p50:>10.0f}ms {percentile(lat, 0.95):>7.0f}ms"
         )
 
-    out.append("\n-- 記録の穴 (ゼロ埋めしない。年率の分母からも外す)")
+    out.append("\n-- 記録の穴: bitbank の板 (ゼロ埋めしない。年率の分母からも外す)")
     for pair, d in m.data.items():
-        times = d.times
-        cov, n = coverage(times, m.since, m.until, m.poll_sec)
-        gaps = []
-        for a, b in zip(times, times[1:]):
-            if (b - a) / 1000.0 > m.poll_sec * 3:
-                gaps.append((a, b, (b - a) / 1000.0))
-        long_gaps = [g for g in gaps if g[2] >= GAP_LIST_THRESHOLD_SEC]
-        short = [g for g in gaps if g[2] < GAP_LIST_THRESHOLD_SEC]
-        out.append(
-            f"{pair:<11} 標本 {n:>7}  カバレッジ {cov * 100:5.1f}%  穴 {len(gaps)} 件 "
-            f"(合計 {sum(g[2] for g in gaps) / 60:.1f} 分)"
-        )
-        for a, b, s in sorted(long_gaps, key=lambda g: -g[2]):
-            out.append(f"            未測定: {_ts(a)} -> {_ts(b)} ({s / 60:.1f} 分)")
-        if short:
-            out.append(
-                f"            60 秒未満の穴 {len(short)} 件 (合計 {sum(g[2] for g in short) / 60:.1f} 分, "
-                f"最長 {max(g[2] for g in short):.0f} 秒) — 個別には列挙しない"
-            )
+        out.extend(_gap_lines(pair, d.times, m.since, m.until, m.poll_sec))
+
+    # ヘッジ先の板の穴。ここが空いた区間の約定は「ヘッジコスト未測定」として純益の式から外れる
+    # (ゼロ埋めしない)。bitbank 側が埋まっていても約定が式に入らなくなるので、別に列挙する。
+    out.append("\n-- 記録の穴: Hyperliquid の板 (この区間の約定はヘッジコストが測れず式から外れる)")
+    for pair, d in m.data.items():
+        coin = declared.PAIRS[pair]
+        out.extend(_gap_lines(f"{pair}/{coin}", d.hl_times, m.since, m.until, m.hl_poll_sec))
 
     ovf = store.query(
         "SELECT pair, COUNT(*) n FROM tape_overflow WHERE time>=? AND time<? GROUP BY pair", (m.since, m.until)

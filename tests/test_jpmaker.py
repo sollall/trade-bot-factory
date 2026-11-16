@@ -37,6 +37,7 @@ from tbf.jpmaker.report import (
     overall_verdict,
     section_adverse_basis_flip,
     section_adverse_distribution,
+    section_uptime,
     section_verdict,
     walkforward,
 )
@@ -507,6 +508,49 @@ def test_tape_overflow_is_flagged_not_filled(tmp_path):
     asyncio.run(col.poll_tape("render_jpy"))
     store.commit()
     assert store.query("SELECT COUNT(*) n FROM tape_overflow")[0]["n"] == 1
+
+
+def test_uptime_lists_hedge_venue_gaps_separately(tmp_path):
+    """ヘッジ先 (Hyperliquid) の板の穴も 1 件ずつ列挙されること
+
+    bitbank 側が埋まっていても HL 側が空いていればヘッジコストが測れず、その約定は
+    純益の式から外れる。完了条件が「穴の全件列挙」なので、会場ごとに別に出す。
+    """
+    pair, coin = "render_jpy", declared.PAIRS["render_jpy"]
+    since = T0
+    until = T0 + 3_600_000
+    store = JpMakerStore(tmp_path / "db.sqlite")
+    data = {}
+    for p, c in declared.PAIRS.items():
+        d = PairData(pair=p)
+        # bitbank の板は 1 秒刻みで穴なし
+        d.samples = book(3_600, 99.0, 101.0, start=since, step=1_000)
+        # HL は 5 秒刻み。render_jpy だけ 600 秒の穴を空ける (他銘柄は穴なし)
+        for i in range(720):
+            t = since + i * 5_000
+            if p == pair and 1_000_000 <= (t - since) < 1_600_000:
+                continue
+            d.hl.append(HlSample(t, [(1.0, 100.0)], [(1.01, 100.0)]))
+        data[p] = d
+        store.add_poll(since, "hyperliquid", "l2Book", 25.0, 200, None)
+        _ = c
+    store.commit()
+    m = Measurement(since=since, until=until, poll_sec=1.0, delay_ms=1_250.0, hl_poll_sec=5.0, data=data)
+
+    text = section_uptime(store, m)
+    assert "-- 記録の穴: bitbank の板" in text
+    assert "-- 記録の穴: Hyperliquid の板" in text
+    hl_part = text.split("-- 記録の穴: Hyperliquid の板")[1]
+    # 穴のある銘柄が列挙され、長さがそのまま出ている (ゼロ埋めしていない)
+    assert f"{pair}/{coin}" in hl_part
+    # 穴の長さは「最後の標本 -> 次の標本」で 605 秒 (5 秒刻みなので 600 秒 + 1 間隔)
+    assert "穴 1 件 (合計 10.1 分)" in hl_part
+    assert "未測定:" in hl_part
+    # 穴のない銘柄はカバレッジ 100% で、未測定行が付かない
+    gala_line = [ln for ln in hl_part.splitlines() if ln.startswith("gala_jpy/")][0]
+    assert "穴 0 件" in gala_line
+    # bitbank 側の区画に HL の穴が混ざらない
+    assert "未測定:" not in text.split("-- 記録の穴: Hyperliquid の板")[0]
 
 
 def test_report_runs_end_to_end(tmp_path):

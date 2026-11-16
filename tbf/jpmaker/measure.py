@@ -215,6 +215,7 @@ class Measurement:
     until: int
     poll_sec: float
     delay_ms: float
+    hl_poll_sec: float = declared.HL_POLL_SEC
     # (pair, side, size, mode) -> SimResult
     sims: dict[tuple, object] = field(default_factory=dict)
     # (pair, side, size, mode) -> list[FillEcon]
@@ -222,8 +223,17 @@ class Measurement:
     data: dict[str, PairData] = field(default_factory=dict)
 
 
-def run_all(data: dict[str, PairData], since: int, until: int, poll_sec: float, delay_ms: float) -> Measurement:
-    m = Measurement(since=since, until=until, poll_sec=poll_sec, delay_ms=delay_ms, data=data)
+def run_all(
+    data: dict[str, PairData],
+    since: int,
+    until: int,
+    poll_sec: float,
+    delay_ms: float,
+    hl_poll_sec: float = declared.HL_POLL_SEC,
+) -> Measurement:
+    m = Measurement(
+        since=since, until=until, poll_sec=poll_sec, delay_ms=delay_ms, hl_poll_sec=hl_poll_sec, data=data
+    )
     for pair, d in data.items():
         for side in ("buy", "sell"):
             for size in declared.SIZES_JPY:
