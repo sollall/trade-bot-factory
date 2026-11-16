@@ -1,0 +1,31 @@
+{
+ "results": [
+  {
+   "ask": "2254.24",
+   "ask_size": "0.04",
+   "bid": "2253.92",
+   "bid_size": "0.04",
+   "created_at": 1793696591706,
+   "delta": "0.99987",
+   "external_fair_price": "2253.53481269",
+   "funding_interval_minutes": 480,
+   "funding_rate": "0.000066080074",
+   "greeks": {
+    "delta": "0.99987",
+    "gamma": "0",
+    "vega": "0"
+   },
+   "last_traded_price": "2253.94",
+   "mark_price": "2254.13175834",
+   "open_interest": "1562.7494",
+   "open_interest_long": "781.3747",
+   "open_interest_short": "781.3747",
+   "price_change_rate_24h": "-0.0181",
+   "risk_free_rate": "0",
+   "symbol": "ETH-USD-PERP",
+   "total_volume": "51184884761.2045182",
+   "underlying_price": "2254.43259025",
+   "volume_24h": "1030157.8651339995"
+  }
+ ]
+}

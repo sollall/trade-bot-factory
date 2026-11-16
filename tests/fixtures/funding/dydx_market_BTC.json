@@ -1,0 +1,28 @@
+{
+ "markets": {
+  "BTC-USD": {
+   "atomicResolution": -10,
+   "baseOpenInterest": "782.0931",
+   "clobPairId": "0",
+   "defaultFundingRate1H": "0",
+   "initialMarginFraction": "0.02",
+   "maintenanceMarginFraction": "0.012",
+   "marketType": "CROSS",
+   "nextFundingRate": "0.00001495833333333333",
+   "openInterest": "227.2878",
+   "openInterestLowerCap": "0",
+   "openInterestUpperCap": "0",
+   "oraclePrice": "76577.67523",
+   "priceChange24H": "-1628.91817",
+   "quantumConversionExponent": -9,
+   "status": "ACTIVE",
+   "stepBaseQuantums": 1000000,
+   "stepSize": "0.0001",
+   "subticksPerTick": 100000,
+   "tickSize": "1",
+   "ticker": "BTC-USD",
+   "trades24H": 1387,
+   "volume24H": "1929178.3445"
+  }
+ }
+}

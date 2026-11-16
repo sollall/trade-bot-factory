@@ -1,0 +1,46 @@
+{
+ "historicalFunding": [
+  {
+   "effectiveAt": "2026-11-03T09:00:00.587Z",
+   "effectiveAtHeight": "112269167",
+   "price": "76534.65148",
+   "rate": "0.000014375",
+   "ticker": "BTC-USD"
+  },
+  {
+   "effectiveAt": "2026-11-03T08:00:00.556Z",
+   "effectiveAtHeight": "112263646",
+   "price": "76707.58404",
+   "rate": "0.000012125",
+   "ticker": "BTC-USD"
+  },
+  {
+   "effectiveAt": "2026-11-03T07:00:00.608Z",
+   "effectiveAtHeight": "112257872",
+   "price": "76474.3521",
+   "rate": "0.000018375",
+   "ticker": "BTC-USD"
+  },
+  {
+   "effectiveAt": "2026-11-03T06:00:00.609Z",
+   "effectiveAtHeight": "112252116",
+   "price": "76555.13972",
+   "rate": "0.000028625",
+   "ticker": "BTC-USD"
+  },
+  {
+   "effectiveAt": "2026-11-03T05:00:00.096Z",
+   "effectiveAtHeight": "112246392",
+   "price": "76811.06954",
+   "rate": "0.000026375",
+   "ticker": "BTC-USD"
+  },
+  {
+   "effectiveAt": "2026-11-03T04:00:00.492Z",
+   "effectiveAtHeight": "112240655",
+   "price": "76832.12823",
+   "rate": "0.000016125",
+   "ticker": "BTC-USD"
+  }
+ ]
+}
