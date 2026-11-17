@@ -215,6 +215,31 @@ tick をまたいで古い足が残ることはない。現在価格とファン
 歯止めは `tests/test_worker.py::test_bots_sharing_a_candle_fetch_it_once_per_tick`
 (包みを外すと落ちる) と `tests/test_market_data.py` の 5 節。
 
+### それでも 429 は出る前提で、足の判断を落とさない
+
+畳んだあとの 13:15 UTC の 15 分足でも 1 本 (`rsi_reversion`) が 429 で落ちた。
+このときのリクエストは ETH-USD の 15 分足 1 回だけで、取り直しも 4 回している。
+**Coinbase の公開APIの余裕は自分の流量と無関係に決まる** (同じ出口IPを使う他の
+Cloudflare 利用者と合算される) ので、こちらの回数をどれだけ減らしても 0 にはできない。
+
+問題は 429 そのものより、落ちたときに**その足の判断が永久に飛ぶ**ことだった。
+`store.claim_candle()` は二重発注を防ぐために足の処理権を先に取る (`last_candle` を進める) ので、
+そのあとの取得で落ちると、同じ足はもう処理されない。1 時間足なら 1 回の売買判断が丸ごと消える。
+
+`tbf/worker/runner.py` はこう直してある。
+
+- 発注より前 (ファンディング・足の取得) で落ちたら **処理権を戻す** (`store.release_candle()`)。
+  次の tick (1 分後) に同じ足をやり直すので、判断は最大 1 分遅れるだけで失われない。
+  遅れは `execution_quality` の「発注までの時間」に出る。
+- その失敗は `CandleRetry` として **`last_tick_errors` には数えず warn イベントだけ残す**
+  (取り逃しではないため)。Slack にも流さない。
+- **次の足が確定してもまだ取れていない**ときは普通のエラーにする (= `last_tick_errors` に数え、
+  Slack に流す)。黙って遅れ続けない。
+
+歯止めは `tests/test_worker.py` の
+`test_a_candle_that_could_not_be_fetched_is_retried_on_the_next_tick` と
+`test_a_candle_missed_for_a_whole_period_is_reported_as_an_error`。
+
 ## いまの設定
 
 | 取得元 | 既定のホスト | Worker の上書き |
