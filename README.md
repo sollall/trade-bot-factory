@@ -130,9 +130,11 @@ bot = Bot(
 `"market"` なら足の終値で成行に落とし、`"skip"` なら見送って次の足で置き直します。
 バックテストの結果には `limit_orders` / `limit_fallbacks` (成行落ち) が出ます。
 
-**価格データの取得元**: `price_source=("binance", "BTCUSDT")` を渡すと、売買の会場と別のところから
-足・価格を取ります。国内業者 (`gmo` / `bitbank`) の板は JPY 建てで `tbf/market/` に取り込みがないため、
-現物レッグはこの形で Binance の USDT 建てを使います (近似の誤差幅は `tbf/core/instrument.py` のコメント)。
+**価格データの取得元**: `price_source=("coinbase", "BTC-USD")` を渡すと、売買の会場と別のところから
+足・価格を取ります。**現物レッグはすべてこの形で Coinbase の USD 建てを使います**
+(近似の誤差幅は `tbf/core/instrument.py` のコメント)。理由は 2 つで、国内業者 (`gmo` / `bitbank`) の板は
+JPY 建てで `tbf/market/` に取り込みがないこと、Binance は Cloudflare Workers から安定して取れないこと
+(`docs/market-data.md`)。取得元を足すときは `tbf/market/` に実装して `MARKET_VENUES` に登録します。
 
 **本番 (live) で発注できるのは今は Binance 現物だけ** です。Hyperliquid の先物は paper まで動きます。
 未対応の銘柄を含む bot を `deploy=["live"]` にするとビルド (デプロイ) の時点で止まります。
