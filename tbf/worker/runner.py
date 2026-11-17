@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Mapping, Optional, Sequence
 
 from tbf.core.bot import Bot, Targets
@@ -14,6 +14,7 @@ from tbf.core.risk import check_risk, next_consecutive_losses
 from tbf.core.step import run_strategy, utc_day
 from tbf.core.types import HOUR, TIMEFRAME_MS, EquityPoint, Fill
 from tbf.market import VenueMarket
+from tbf.market.cache import per_tick_markets
 from tbf.worker.brokers import Broker, OrderRequest
 from tbf.worker.notify import Notifier
 from tbf.worker.store import BotRow, ExecInfo, Store
@@ -60,6 +61,9 @@ async def tick(bots: Sequence[Bot], rt: Runtime) -> int:
     if not bots:
         return 0
     errors = 0
+    # 同じ銘柄・同じ足を見ている bot が同じリクエストを重ねて投げないようにする。
+    # 確定足の tick でこれが流量制限 (429) の原因になっていた (TRA-81)
+    rt = replace(rt, markets=per_tick_markets(rt.markets, bots))
     by_venue = await fetch_prices(bots, rt)
     for bot in bots:
         try:

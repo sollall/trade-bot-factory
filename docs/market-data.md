@@ -187,8 +187,33 @@ Coinbase で 180 日ぶんの 1h 足を実際に取ると、**15 リクエスト
 
 Hyperliquid は実測で 13 回中 3 回 429 を返した (Cloudflare の出口IPは他の利用者と共有で、
 自分が毎分 1 回しか叩いていなくても踏む)。これは perp レッグを持つ 4 bot に効くので、
-`tbf/http.py` の `request_retrying()` で **429 / 5xx は 0.25 秒・1 秒 待って取り直す** (計 3 回)。
+`tbf/http.py` の `request_retrying()` で **429 / 5xx は 0.25 秒・1 秒・2.5 秒 待って取り直す** (計 4 回)。
 Coinbase と Hyperliquid の両方がこれを通る。403 / 451 (地域制限) は待っても直らないので取り直さない。
+
+### 同じ足を重ねて取らない (2026-11-17 13:00 UTC の実測から)
+
+Coinbase に移したあと、**1 時間足が確定する tick だけ** 6 bot 中 2 本が落ちた:
+
+```
+GET https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600&...
+  -> HTTP 429 {"message":"Public rate limit exceeded"}
+```
+
+毎分の tick は現在価格 2 回だけなので通るが、確定足の tick では全 bot が足を取りにいく。
+ETH-USD の 1 時間足は 4 bot が、BTC-USD は 2 bot が**それぞれ別に**取っていたので、
+同じ内容のリクエストが短時間に重なり、共有出口IPの余裕を超えた。
+取り直し (当時 0.25 + 1.0 秒) でも収まらなかった。
+
+対策は取り直しではなく**投げる回数を減らすこと**。`tbf/market/cache.py` の `CachingMarket` が
+1 tick のあいだ同じ (銘柄, 足) の取得を 1 回に畳む。tick の最初に bot の定義から
+「この tick で誰かが必要とする最大本数」を数えておき (`candles_needed`)、最初に欲しがった bot の
+ところでその本数をまとめて取る。あとの bot は手元の足の新しい側を切り出して使うので、
+**bot の順番によって回数が変わらない**。包みは `per_tick_markets()` で tick ごとに作り直すため、
+tick をまたいで古い足が残ることはない。現在価格とファンディングも同じ tick 内では 1 回。
+
+これで確定足の tick の Coinbase への足のリクエストは **6 回 → 2 回** (銘柄の数) になる。
+歯止めは `tests/test_worker.py::test_bots_sharing_a_candle_fetch_it_once_per_tick`
+(包みを外すと落ちる) と `tests/test_market_data.py` の 5 節。
 
 ## いまの設定
 
@@ -206,4 +231,4 @@ Coinbase と Hyperliquid の両方がこれを通る。403 / 451 (地域制限) 
 `data/` のキャッシュ名には取得元が入る (`coinbase_spot_BTC-USD_1h_...`) ので、
 取得元を変えてもキャッシュは混ざらない。
 
-テストは `tests/test_market_data.py` (上の 1〜4 を固定)。
+テストは `tests/test_market_data.py` (上の 1〜5 を固定)。

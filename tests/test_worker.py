@@ -243,3 +243,41 @@ def test_binance_order_parsing_and_rounding():
     assert bf.fill.qty == pytest.approx(0.999) and bf.fill.instrument == "main"
     assert bf.fill.fee == pytest.approx(0.1)
     assert bf.fill.qty * bf.fill.price + bf.fill.fee == pytest.approx(100)
+
+
+async def test_bots_sharing_a_candle_fetch_it_once_per_tick():
+    """同じ銘柄・同じ足を見ている bot が何本あっても、取得は 1 tick に 1 回。
+    13:00 UTC の確定足で Coinbase の 429 (流量制限) を踏んだのは、これが 6 本重なったため (TRA-81)。
+    短い lookback の bot も、まとめて取った足の新しい側を使う"""
+
+    class Counting(FakeMarket):
+        def __init__(self):
+            super().__init__()
+            self.recent_calls = []
+
+        async def recent(self, symbol, timeframe, count, now):
+            self.recent_calls.append((symbol, timeframe, count))
+            return await super().recent(symbol, timeframe, count, now)
+
+    seen: dict[str, int] = {}
+
+    def strategy_for(bot_id):
+        def strategy(ctx):
+            seen[bot_id] = len(ctx.closes)
+            return 0
+
+        return strategy
+
+    db, market = make_db(), Counting()
+    bots = [
+        Bot(
+            id=f"look{n}", symbol="BTCUSDT", timeframe="1h", lookback=n, capital=1000,
+            risk=Risk(max_drawdown=0.2), strategy=strategy_for(f"look{n}"),
+        )
+        for n in (5, 20, 50)
+    ]
+    await make_app(bots, db, {"binance": market}).scheduled("* * * * *", NOW)
+
+    assert market.recent_calls == [("BTCUSDT", "1h", 50)]
+    assert seen == {"look5": 5, "look20": 20, "look50": 50}
+    assert not await db.query("SELECT * FROM events WHERE level='error'")

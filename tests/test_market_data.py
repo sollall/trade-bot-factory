@@ -17,17 +17,19 @@ Worker では約半分の tick で 1 件も価格が取れない。一方バッ�
 import pytest
 
 from scripts import build_worker as build
-from tbf import spot
-from tbf.core.types import TIMEFRAME_MS
-from tbf.http import RETRY_STATUSES, request_retrying
+from tbf import Bot, spot
+from tbf.core.types import TIMEFRAME_MS, Candle
+from tbf.http import RETRY_DELAYS, RETRY_STATUSES, request_retrying
 from tbf.market import MARKET_VENUES, UNREACHABLE_FROM_WORKERS, default_markets, venue_timeframes
 from tbf.market.binance import MARKET_DATA_HOSTS
+from tbf.market.cache import CachingMarket, candles_needed, per_tick_markets
 from tbf.market.coinbase import EXCHANGE_URL, MAX_CANDLES, TIMEFRAMES, CoinbaseMarket, fetch_candles
 from tbf.market.hyperliquid import HyperliquidMarket
 from tbf.registry import bot_ids, load_bot
 from tbf.worker.app import Settings
 
 H = TIMEFRAME_MS["1h"]
+NOW = 1_800_000_000_000 // H * H + 30_000  # 足が確定した 30 秒後
 
 
 class FakeHttp:
@@ -200,7 +202,7 @@ async def test_giving_up_names_the_status():
     http = FakeHttp(lambda u, n: (429, "too many requests"))
     with pytest.raises(RuntimeError, match="429"):
         await CoinbaseMarket(http).prices(["BTC-USD"])
-    assert len(http.calls) == 3  # RETRY_DELAYS + 1 回で諦める
+    assert len(http.calls) == len(RETRY_DELAYS) + 1  # 取り直してから諦める
 
 
 async def test_a_request_that_succeeds_is_not_retried():
@@ -214,3 +216,101 @@ async def test_status_that_will_not_recover_is_not_retried():
     http = FakeHttp(lambda u, n: (451, "Unavailable For Legal Reasons"))
     status, _ = await request_retrying(http, "GET", "https://example.test")
     assert status == 451 and len(http.calls) == 1
+
+
+# ---- 5. 同じ tick で同じ足を取り直さない ----
+# 13:00 UTC の確定足で 6 bot が同時に足を取りにいき、Coinbase の 429 で 2 本落ちた。
+# 同じ銘柄・同じ足を見ている bot のリクエストは 1 回に畳む (tbf/market/cache.py)。
+
+
+class CountingMarket:
+    """recent / prices / funding の呼ばれ方を数えるだけの取得元"""
+
+    def __init__(self):
+        self.recent_calls: list[tuple[str, str, int, int]] = []
+        self.price_calls: list[list[str]] = []
+        self.funding_calls: list[tuple[str, int, int]] = []
+
+    async def prices(self, symbols):
+        self.price_calls.append(list(symbols))
+        return {s: 100.0 for s in symbols}
+
+    async def recent(self, symbol, timeframe, count, now):
+        self.recent_calls.append((symbol, timeframe, count, now))
+        cur = now // H * H
+        return [Candle(cur - i * H, 100, 101, 99, 100 + i) for i in range(count, 0, -1)]
+
+    async def history(self, symbol, timeframe, start, end):
+        return []
+
+    async def funding(self, symbol, start, end):
+        self.funding_calls.append((symbol, start, end))
+        return []
+
+
+def test_the_needed_count_is_the_longest_lookback_of_the_bots_sharing_a_candle():
+    bots = [
+        Bot(id="a", symbol="BTC-USD", timeframe="1h", lookback=20, capital=1, strategy=lambda c: 0),
+        Bot(id="b", symbol="BTC-USD", timeframe="1h", lookback=200, capital=1, strategy=lambda c: 0),
+        Bot(id="c", symbol="BTC-USD", timeframe="15m", lookback=50, capital=1, strategy=lambda c: 0),
+    ]
+    assert candles_needed(bots) == {"binance": {("BTC-USD", "1h"): 200, ("BTC-USD", "15m"): 50}}
+
+
+async def test_the_longest_series_is_fetched_once_and_sliced_for_the_shorter_bots():
+    inner = CountingMarket()
+    m = CachingMarket(inner, {("BTC-USD", "1h"): 200})
+    long = await m.recent("BTC-USD", "1h", 200, NOW)
+    short = await m.recent("BTC-USD", "1h", 20, NOW)
+    assert inner.recent_calls == [("BTC-USD", "1h", 200, NOW)]  # 2 本目は手元の足を切り出した
+    assert len(long) == 200 and len(short) == 20
+    assert short == long[-20:]  # 新しい方の 20 本
+
+
+async def test_the_first_bot_already_fetches_what_the_later_bots_will_need():
+    """足の短い bot が先に来ても、まとめて取っておく (順番で回数が変わらないように)"""
+    inner = CountingMarket()
+    m = CachingMarket(inner, {("BTC-USD", "1h"): 200})
+    assert len(await m.recent("BTC-USD", "1h", 20, NOW)) == 20
+    assert len(await m.recent("BTC-USD", "1h", 200, NOW)) == 200
+    assert inner.recent_calls == [("BTC-USD", "1h", 200, NOW)]
+
+
+async def test_more_candles_than_expected_are_fetched_again_rather_than_truncated():
+    inner = CountingMarket()
+    m = CachingMarket(inner, {})
+    assert len(await m.recent("BTC-USD", "1h", 20, NOW)) == 20
+    assert len(await m.recent("BTC-USD", "1h", 50, NOW)) == 50
+    assert inner.recent_calls == [("BTC-USD", "1h", 20, NOW), ("BTC-USD", "1h", 50, NOW)]
+
+
+async def test_different_symbols_timeframes_and_ticks_are_separate():
+    inner = CountingMarket()
+    m = CachingMarket(inner, {})
+    await m.recent("BTC-USD", "1h", 10, NOW)
+    await m.recent("ETH-USD", "1h", 10, NOW)
+    await m.recent("BTC-USD", "15m", 10, NOW)
+    await m.recent("BTC-USD", "1h", 10, NOW + H)
+    assert len(inner.recent_calls) == 4
+
+
+async def test_prices_and_funding_are_asked_once_each():
+    inner = CountingMarket()
+    m = CachingMarket(inner, {})
+    assert await m.prices(["BTC-USD", "ETH-USD"]) == {"BTC-USD": 100.0, "ETH-USD": 100.0}
+    assert await m.prices(["BTC-USD"]) == {"BTC-USD": 100.0}
+    assert inner.price_calls == [["BTC-USD", "ETH-USD"]]
+    await m.funding("BTC", 0, H)
+    await m.funding("BTC", 0, H)
+    assert inner.funding_calls == [("BTC", 0, H)]
+
+
+def test_every_tick_gets_a_fresh_wrapper():
+    """tick をまたいで古い足を使い回さない"""
+    inner = CountingMarket()
+    bots = [Bot(id="a", symbol="BTC-USD", timeframe="1h", lookback=20, capital=1, strategy=lambda c: 0)]
+    first = per_tick_markets({"binance": inner}, bots)
+    second = per_tick_markets({"binance": inner}, bots)
+    assert first["binance"].inner is inner and second["binance"].inner is inner
+    assert first["binance"] is not second["binance"]
+    assert first["binance"].needed == {("BTC-USD", "1h"): 20}

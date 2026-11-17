@@ -26,9 +26,11 @@ def with_user_agent(headers: Optional[dict[str, str]]) -> dict[str, str]:
 # 取り直す価値のある応答。429 は流量制限で、Cloudflare Workers の出口IP は他の利用者と
 # 共有なので自分が静かでも踏むことがある (TRA-81 の実測で Hyperliquid が 13 回中 3 回)。
 RETRY_STATUSES = (429, 500, 502, 503, 504)
-#: 取り直す前に待つ秒数。回数はこの長さ + 1 (= 3 回) で、増える待ち時間は最大 1.25 秒。
+#: 取り直す前に待つ秒数。回数はこの長さ + 1 (= 4 回) で、増える待ち時間は最大 3.75 秒。
 #: cron は毎分なので、同じ tick の中で取り直しても次の tick には間に合う。
-RETRY_DELAYS = (0.25, 1.0)
+#: 1.25 秒 (0.25 + 1.0) では 13:00 UTC の確定足で Coinbase の 429 が収まらなかったので伸ばした。
+#: 根本の対策は投げる回数を減らすこと (tbf/market/cache.py)。こちらは取りこぼしの受け皿。
+RETRY_DELAYS = (0.25, 1.0, 2.5)
 
 
 async def request_retrying(
