@@ -1,4 +1,11 @@
-"""Binance の公開マーケットデータ"""
+"""Binance の公開マーケットデータ
+
+【本番では使わない】Binance は Cloudflare Workers の US colo からの通信を必ず弾くので
+(403 / 451 地域制限)、Worker では約半分の tick で価格が取れない。本番・バックテストの
+現物の取得元は Coinbase (tbf/market/coinbase.py)。このモジュールは手元での比較・調査用に
+残してあり、tbf.market.UNREACHABLE_FROM_WORKERS に入っているので bot の price_source に
+すると scripts/build_worker.py がデプロイ前に落とす。実測は docs/market-data.md (TRA-81)。
+"""
 
 from __future__ import annotations
 
@@ -9,15 +16,34 @@ from urllib.parse import urlencode
 from tbf.core.types import TIMEFRAME_MS, Candle, FundingPoint
 from tbf.http import Http
 
-# 地域制限を受けにくい公開データ用エンドポイント
-DEFAULT_MARKET_DATA_URL = "https://data-api.binance.vision"
+# 公開データ用のホスト。先頭を既定にし、失敗したら順に次を試す。
+#
+# data-api.binance.vision と api.binance.com / api1 / api2 は Cloudflare Workers の出口IP を
+# 403 で弾く (TRA-81 で計測)。api-gcp.binance.com だけは Workers からも 200 で返る。
+# 中身は同じで、1h 足 1000 本と ticker/price がどちらのホストでも完全一致することを確認済み。
+# ただし api-gcp も US colo では 451 を返すので、Workers から安定して使えるホストは無い。
+#
+# ホストごとの遮断はまた起きうるので、1 つが落ちても残りで続けられるように並べてある。
+# 先頭を変えたいときは BinanceMarket(base_url=...) / fetch_*(base_url=...) で渡す。
+MARKET_DATA_HOSTS = (
+    "https://api-gcp.binance.com",
+    "https://data-api.binance.vision",
+    "https://api.binance.com",
+)
+DEFAULT_MARKET_DATA_URL = MARKET_DATA_HOSTS[0]
 
 
-async def _get_json(http: Http, url: str):
-    status, text = await http.request("GET", url)
-    if status != 200:
-        raise RuntimeError(f"GET {url}: HTTP {status} {text[:200]}")
-    return json.loads(text)
+async def _get_json(http: Http, base_url: str, path: str):
+    """base_url で取れなければ MARKET_DATA_HOSTS の残りを試す"""
+    hosts = [base_url] + [h for h in MARKET_DATA_HOSTS if h != base_url]
+    error = ""
+    for host in hosts:
+        status, text = await http.request("GET", host + path)
+        if status == 200:
+            return json.loads(text)
+        if not error:  # 最初のホストの失敗を伝える (そこが本来の取得先なので)
+            error = f"GET {host}{path}: HTTP {status} {text[:200]}"
+    raise RuntimeError(error)
 
 
 async def fetch_klines(
@@ -35,7 +61,7 @@ async def fetch_klines(
         q["startTime"] = start_time
     if end_time is not None:
         q["endTime"] = end_time
-    raw = await _get_json(http, f"{base_url}/api/v3/klines?{urlencode(q)}")
+    raw = await _get_json(http, base_url, f"/api/v3/klines?{urlencode(q)}")
     return [Candle(int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])) for k in raw]
 
 
@@ -72,7 +98,7 @@ async def fetch_prices(http: Http, symbols: list[str], base_url: str = DEFAULT_M
     if not uniq:
         return {}
     q = urlencode({"symbols": json.dumps(uniq, separators=(",", ":"))})
-    body = await _get_json(http, f"{base_url}/api/v3/ticker/price?{q}")
+    body = await _get_json(http, base_url, f"/api/v3/ticker/price?{q}")
     return {t["symbol"]: float(t["price"]) for t in body}
 
 

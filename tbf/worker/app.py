@@ -13,7 +13,7 @@ from tbf.core.bot import Bot
 from tbf.core.metrics import compute_metrics
 from tbf.http import Http
 from tbf.market import VenueMarket, default_markets
-from tbf.market.binance import DEFAULT_MARKET_DATA_URL
+from tbf.market.coinbase import EXCHANGE_URL
 from tbf.market.hyperliquid import INFO_URL
 from tbf.worker.brokers import BinanceBroker, Broker, PaperBroker, RoutingBroker, UnsupportedBroker
 from tbf.worker.dashboard import BotSummary, render_dashboard
@@ -29,7 +29,9 @@ DAILY_CRON = "5 0 * * *"
 @dataclass
 class Settings:
     mode: str
-    market_data_url: str = DEFAULT_MARKET_DATA_URL
+    # 現物の価格・足の取得元 (COINBASE_URL)。Binance は Workers から取れないので使わない
+    # (理由と実測は docs/market-data.md)
+    coinbase_url: str = EXCHANGE_URL
     hyperliquid_url: str = INFO_URL
     binance_api_url: str = "https://api.binance.com"
     binance_api_key: Optional[str] = None
@@ -53,7 +55,7 @@ class Settings:
             raise ValueError("PREVIEW は MODE=paper でだけ使えます")
         return cls(
             mode=mode,
-            market_data_url=get("MARKET_DATA_URL") or DEFAULT_MARKET_DATA_URL,
+            coinbase_url=get("COINBASE_URL") or EXCHANGE_URL,
             hyperliquid_url=get("HYPERLIQUID_URL") or INFO_URL,
             binance_api_url=get("BINANCE_API_URL") or "https://api.binance.com",
             binance_api_key=get("BINANCE_API_KEY"),
@@ -95,7 +97,7 @@ class App:
         self.bots = list(bots) if settings.preview else bots_for_mode(bots, settings.mode)
         self.store = Store(db)
         self.http = http
-        self.markets = markets or default_markets(http, settings.market_data_url, settings.hyperliquid_url)
+        self.markets = markets or default_markets(http, settings.coinbase_url, settings.hyperliquid_url)
 
     def _broker(self) -> Broker:
         s = self.settings

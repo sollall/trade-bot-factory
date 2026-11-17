@@ -1,4 +1,4 @@
-from tbf import Bot, Context, Decision, Risk
+from tbf import Bot, Context, Decision, Risk, spot
 from tbf.core import indicators as ind
 
 
@@ -17,7 +17,11 @@ def strategy(ctx: Context):
 bot = Bot(
     id="rsi_reversion",
     description="RSI が売られすぎで買い、買われすぎで手仕舞い",
-    symbol="ETHUSDT",
+    instruments={
+        # 価格・足は Coinbase から取る。Binance は Cloudflare Workers から安定して取れない
+        # (発注先は venue のまま。実測と理由は docs/market-data.md / TRA-81)
+        "ETHUSDT": spot("ETHUSDT", price_source=("coinbase", "ETH-USD")),
+    },
     timeframe="15m",
     lookback=100,
     capital=1000,

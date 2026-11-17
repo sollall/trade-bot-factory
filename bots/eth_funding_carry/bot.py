@@ -26,7 +26,11 @@ def strategy(ctx: Context):
 bot = Bot(
     id="eth_funding_carry",
     description="ETH 現物ロング + 先物ショートでファンディングを受け取る (閾値で出入り)",
-    instruments={"spot": spot("ETHUSDT"), "perp": perp("ETH")},
+    instruments={
+        # 価格・足は Coinbase から (Binance は Workers から取れない。docs/market-data.md)
+        "spot": spot("ETHUSDT", price_source=("coinbase", "ETH-USD")),
+        "perp": perp("ETH"),
+    },
     timeframe="1h",
     lookback=24,
     capital=10_000,

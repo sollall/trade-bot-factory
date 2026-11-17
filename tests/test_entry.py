@@ -75,12 +75,14 @@ async def fake_fetch(url, opts):
                 for t in range(req["startTime"] // HOUR * HOUR + HOUR, req["endTime"] + 1, HOUR)
             ][:500]
             return FakeFetchResponse(200, json.dumps(rows))
-    if "/ticker/price" in url:
-        symbols = json.loads(parse_qs(urlparse(url).query)["symbols"][0])
-        return FakeFetchResponse(200, json.dumps([{"symbol": s, "price": "3000"} for s in symbols]))
-    if "/klines" in url:
-        cur = NOW // HOUR * HOUR
-        rows = [[cur - i * HOUR, "1", "1", "1", str(3000 + 100 - i), "1"] for i in range(100, -1, -1)]
+    if "/ticker" in url:  # Coinbase: /products/BTC-USD/ticker
+        return FakeFetchResponse(200, json.dumps({"price": "3000"}))
+    if "/candles" in url:  # Coinbase: /products/BTC-USD/candles?granularity=3600&start=&end=
+        q = parse_qs(urlparse(url).query)
+        g, start, end = (int(q[k][0]) for k in ("granularity", "start", "end"))
+        # 新しい順・[時刻(秒), 安値, 高値, 始値, 終値, 出来高]。右肩上がりの系列にする
+        times = list(range(end // g * g, start - 1, -g))
+        rows = [[t, "1", "1", "1", str(3000 + (t - times[-1]) // g), "1"] for t in times]
         return FakeFetchResponse(200, json.dumps(rows))
     return FakeFetchResponse(404, "")
 

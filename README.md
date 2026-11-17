@@ -283,10 +283,12 @@ npx wrangler d1 migrations apply trade-bot-paper --env paper --local   # ロー�
 
 ## 前提と制約
 
-- 取引所: **Binance 現物** (データ・paper・live) と **Hyperliquid 無期限先物** (データ・paper)。
+- 取引所: **Binance 現物** (paper・live の発注) と **Hyperliquid 無期限先物** (データ・paper)。
   **GMOコイン / bitbank の現物** はコストモデルと paper の執行だけ (本番発注は未実装)。本番の注文は成行のみで、
   指値はバックテストと paper でしか通りません。
-  マーケットデータは `data-api.binance.vision` / `api.hyperliquid.xyz` (`MARKET_DATA_URL` / `HYPERLIQUID_URL` で変更可)。
+  価格・足は現物が `api.exchange.coinbase.com`、無期限先物が `api.hyperliquid.xyz`
+  (`COINBASE_URL` / `HYPERLIQUID_URL` で変更可)。**Binance は Cloudflare Workers から安定して取れない**ので
+  データの取得元には使いません (実測と理由は `docs/market-data.md`)。
   取引所を足すときは `tbf/market/` にデータ取得、`tbf/worker/brokers.py` に発注を実装し、`LIVE_SUPPORTED` に登録します
 - live でも bot ごとの口座は D1 上の仮想口座 (`capital` を割り当て、取引所ごとの現金と持ち高) として管理します。
   同じ取引所口座で複数 bot を動かせますが、口座の実残高とは照合しません

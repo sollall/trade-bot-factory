@@ -46,9 +46,9 @@ bot = Bot(
         # 現物レッグは国内の登録業者 (GMOコイン)。bitbank のコストも DEFAULT_FEES に入っていて
         # instruments.spot.venue=bitbank で差し替えられる。どちらにするかは実弾の段で決める
         # (TRA-50 §1-6 では年率 0.03pt しか違わない)。
-        # 価格・足は Binance の USDT 建てで代用する近似。内外価格差の実測は
-        # tbf/core/instrument.py の Instrument.price_source のコメント (TRA-50 §1-5) を参照。
-        "spot": spot("BTCUSDT", venue="gmo", price_source=("binance", "BTCUSDT"),
+        # 価格・足は Coinbase の USD 建てで代用する近似 (国内業者の板は JPY 建てで取り込んでいない)。
+        # ずれの実測は tbf/core/instrument.py の Instrument.price_source のコメントを参照。
+        "spot": spot("BTCUSDT", venue="gmo", price_source=("coinbase", "BTC-USD"),
                      order_type="limit", unfilled="market"),
         "perp": perp("BTC"),
     },

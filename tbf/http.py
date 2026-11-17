@@ -12,6 +12,31 @@ class Http(Protocol):
     ) -> tuple[int, str]: ...
 
 
+# 取り直す価値のある応答。429 は流量制限で、Cloudflare Workers の出口IP は他の利用者と
+# 共有なので自分が静かでも踏むことがある (TRA-81 の実測で Hyperliquid が 13 回中 3 回)。
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+#: 取り直す前に待つ秒数。回数はこの長さ + 1 (= 3 回) で、増える待ち時間は最大 1.25 秒。
+#: cron は毎分なので、同じ tick の中で取り直しても次の tick には間に合う。
+RETRY_DELAYS = (0.25, 1.0)
+
+
+async def request_retrying(
+    http: Http,
+    method: str,
+    url: str,
+    headers: Optional[dict[str, str]] = None,
+    body: Optional[str] = None,
+    delays: tuple[float, ...] = RETRY_DELAYS,
+) -> tuple[int, str]:
+    """429 / 5xx なら少し待って取り直す。最後の応答をそのまま返す (判断は呼び出し側)"""
+    for delay in delays:
+        status, text = await http.request(method, url, headers, body)
+        if status not in RETRY_STATUSES:
+            return status, text
+        await asyncio.sleep(delay)
+    return await http.request(method, url, headers, body)
+
+
 class UrllibHttp:
     """ローカル用 (HTTPS_PROXY 等の環境変数も尊重される)"""
 

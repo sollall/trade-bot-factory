@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / ".build"
 sys.path.insert(0, str(ROOT))
 
+from tbf.market import MARKET_VENUES, UNREACHABLE_FROM_WORKERS, venue_timeframes  # noqa: E402
 from tbf.registry import bot_ids, load_bot  # noqa: E402
 from tbf.worker.brokers import LIVE_SUPPORTED  # noqa: E402
 
@@ -41,6 +42,38 @@ def live_errors(bot) -> list[str]:
         for alias, inst in bot.instruments.items()
         if (inst.venue, inst.kind) not in LIVE_SUPPORTED
     ]
+
+
+def price_errors(bot) -> list[str]:
+    """Worker で価格が取れない bot をデプロイさせない。
+
+    これが無いと Worker の実行時に毎 tick「no price」で落ちるだけで、
+    バックテストは手元から取れてしまうので気づけない (TRA-81)。見張るのは 3 つ:
+      1. 取得元が tbf/market/ に実装されていること
+      2. その取得元が Cloudflare Workers から届くこと
+      3. その取得元に bot の timeframe の足があること
+    """
+    errors = []
+    for alias, inst in bot.instruments.items():
+        venue = inst.price_venue
+        if venue not in MARKET_VENUES:
+            errors.append(
+                f"bots/{bot.id}: {alias} ({inst}) の価格の取得元 {venue!r} が tbf/market/ にありません "
+                f"(使えるのは {', '.join(MARKET_VENUES)})"
+            )
+            continue
+        if venue in UNREACHABLE_FROM_WORKERS:
+            errors.append(
+                f"bots/{bot.id}: {alias} ({inst}) の価格の取得元 {venue!r} は Cloudflare Workers から"
+                f"安定して取れません (docs/market-data.md)。price_source で別の取得元を指定してください"
+            )
+        tfs = venue_timeframes(venue)
+        if tfs and bot.timeframe not in tfs:
+            errors.append(
+                f"bots/{bot.id}: {alias} ({inst}) の価格の取得元 {venue!r} に "
+                f"{bot.timeframe} 足はありません (あるのは {', '.join(tfs)})"
+            )
+    return errors
 
 
 def build_id() -> str:
@@ -75,7 +108,7 @@ def main(argv: list[str] | None = None) -> None:
         except Exception as e:  # noqa: BLE001
             errors.append(f"bots/{i}: {type(e).__name__}: {e}")
             continue
-        errors += live_errors(bot)
+        errors += price_errors(bot) + live_errors(bot)
     if errors:
         sys.exit("\n".join(errors))
 
