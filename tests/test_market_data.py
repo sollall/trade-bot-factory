@@ -142,6 +142,17 @@ async def test_long_ranges_are_split_into_requests_of_300_candles():
     assert all(c.time < candles[i + 1].time for i, c in enumerate(candles[:-1]))
 
 
+async def test_no_candle_is_lost_at_a_request_boundary():
+    """足の途中から 300 本ずつ区切ると、区切りごとに 1 本落ちる (実測で 180 日に 15 本の穴)"""
+    http = FakeHttp(coinbase_candles)
+    now = 1_800_000_000_000 // H * H + 90_000  # 足の途中から頼む
+    candles = await fetch_candles(http, "BTC-USD", "1h", now - 700 * H, now)
+    gaps = [(a.time, b.time) for a, b in zip(candles, candles[1:]) if b.time - a.time != H]
+    assert gaps == []
+    # 先頭の 1 本は start が足の途中に落ちるので範囲外。抜けるのはそれだけ (穴は無い)
+    assert len(candles) == 699
+
+
 async def test_recent_returns_exactly_the_requested_number_of_closed_candles():
     market = CoinbaseMarket(FakeHttp(coinbase_candles))
     now = 1_800_000_000_000 // H * H + 30_000  # 足の途中

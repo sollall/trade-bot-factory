@@ -47,7 +47,10 @@ async def fetch_candles(
     tf = TIMEFRAME_MS[timeframe]
     granularity = _granularity(timeframe)
     out: dict[int, Candle] = {}
-    cursor = start
+    # 足の境界に切り下げてから区切る。start が足の途中だと、その足が「範囲外」として
+    # 落ちるので、切り下げずに 300 本ずつ進めると区切りごとに 1 本抜ける
+    # (180 日ぶんを取ると 15 本の穴になる)
+    cursor = start // tf * tf
     while cursor < end:
         stop = min(cursor + (MAX_CANDLES - 1) * tf, end)
         q = urlencode({"granularity": granularity, "start": cursor // 1000, "end": stop // 1000})
