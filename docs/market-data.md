@@ -173,6 +173,11 @@ Coinbase で 180 日ぶんの 1h 足を実際に取ると、**15 リクエスト
   `price_errors()` が bot の timeframe を突き合わせ、無い足を使う bot はデプロイ前に落ちる。
 - **1 リクエスト 300 本まで** (超えると 400)。`fetch_candles` が 300 本ずつに区切って取る
   (180 日の 1h = 4320 本で 15 リクエスト)。返りは**新しい順**なので古い順に並べ直す。
+- **`/candles` は `User-Agent` が無いと 400** (`{"message":"User-Agent header is required."}`)。
+  `/ticker` は無くても通るので、**確定足の tick だけが落ちる**という形で出る。
+  手元の `urllib` は既定で付けるのでバックテストでは再現せず、Cloudflare の `fetch` は
+  付けないので本番だけ落ちた。`tbf/http.py` の `with_user_agent()` を両方の実装が通すようにし、
+  `tests/test_entry.py` の fake fetch も本物と同じく User-Agent の無い要求を 400 にした。
 - 現在価格は銘柄ごとに 1 リクエスト (`/products/<id>/ticker`)。いまは 2 銘柄なので毎 tick 2 回。
   銘柄が増えたら `/products/stats` (全銘柄 1 回) に替える。
 - USD 建てなので USDT 建ての Binance とは水準が −12bps ずれる (上の表)。
