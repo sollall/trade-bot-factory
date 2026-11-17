@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Mapping, Optional, Sequence
 
 from tbf.core.bot import Bot, Targets
@@ -14,12 +14,23 @@ from tbf.core.risk import check_risk, next_consecutive_losses
 from tbf.core.step import run_strategy, utc_day
 from tbf.core.types import HOUR, TIMEFRAME_MS, EquityPoint, Fill
 from tbf.market import VenueMarket
+from tbf.market.cache import per_tick_markets
 from tbf.worker.brokers import Broker, OrderRequest
 from tbf.worker.notify import Notifier
 from tbf.worker.store import BotRow, ExecInfo, Store
 
 # 戦略に渡すファンディング履歴の最短期間
 FUNDING_WINDOW_MS = 7 * 24 * HOUR
+
+
+class CandleRetry(RuntimeError):
+    """足 (またはファンディング) が取れなかったが、まだ同じ足をやり直す余裕がある
+
+    取得元が 429 を返すことは避けられない (Cloudflare の出口IPは他の利用者と共有)。
+    足の処理権を取ったまま落ちると、その足の戦略判断が**永久に飛ぶ**ので、権利を戻して
+    次の tick (1 分後) でやり直す。判断は最大 1 分遅れるだけで、失われない。
+    すでに 1 本ぶん取り逃しているときは普通のエラーとして扱う (黙って遅れ続けないため)。
+    """
 
 
 @dataclass
@@ -60,6 +71,9 @@ async def tick(bots: Sequence[Bot], rt: Runtime) -> int:
     if not bots:
         return 0
     errors = 0
+    # 同じ銘柄・同じ足を見ている bot が同じリクエストを重ねて投げないようにする。
+    # 確定足の tick でこれが流量制限 (429) の原因になっていた (TRA-81)
+    rt = replace(rt, markets=per_tick_markets(rt.markets, bots))
     by_venue = await fetch_prices(bots, rt)
     for bot in bots:
         try:
@@ -70,6 +84,11 @@ async def tick(bots: Sequence[Bot], rt: Runtime) -> int:
                     raise RuntimeError(f"no price for {inst}")
                 prices[alias] = px
             await run_bot(bot, prices, rt)
+        except CandleRetry as e:
+            # 取り逃しではないのでエラーには数えない (次の tick で同じ足をやり直す)
+            msg = f"{bot.id}: 足が取れなかったので次の tick で取り直します: {e}"
+            print(msg)
+            await rt.store.add_event(bot.id, "warn", msg, rt.now)
         except Exception as e:  # noqa: BLE001  1 つの bot の失敗で他を止めない
             errors += 1
             msg = f"{bot.id}: {type(e).__name__}: {e}"
@@ -121,31 +140,44 @@ async def run_bot(bot: Bot, prices: dict[str, float], rt: Runtime) -> None:
     # --- 戦略 (新しい確定足ごと) ---
     tf = TIMEFRAME_MS[bot.timeframe]
     latest_closed = now // tf * tf - tf
-    if latest_closed <= row.last_candle or not await store.claim_candle(bot.id, latest_closed):
+    claimed_from = row.last_candle
+    if latest_closed <= claimed_from or not await store.claim_candle(bot.id, latest_closed):
         return
     row = await store.get(bot.id)  # type: ignore[assignment]
     assert row is not None
     pf = row.load_portfolio(bot)
 
-    # ファンディングの受け払いと、戦略に渡す履歴
-    perps = [a for a, i in bot.instruments.items() if i.is_perp]
-    funding = {}
-    if row.last_funding == 0:
-        row.last_funding = now
-    for alias in perps:
-        inst = bot.instruments[alias]
-        since = min(row.last_funding, now - max(bot.lookback * tf, FUNDING_WINDOW_MS))
-        hist = await rt.markets[inst.price_venue].funding(inst.price_symbol, since, now)
-        funding[alias] = hist
-        for f in hist:
-            if f.time > row.last_funding:
-                settle_funding(pf, inst, alias, f.rate, prices[alias] / (1 + f.premium))
-    if perps:
-        row.last_funding = max([row.last_funding] + [f.time for fs in funding.values() for f in fs])
+    # 発注の前に落ちたら足の処理権を戻す。戻さないとこの足の判断が永久に飛ぶ (CandleRetry)
+    try:
+        # ファンディングの受け払いと、戦略に渡す履歴
+        perps = [a for a, i in bot.instruments.items() if i.is_perp]
+        funding = {}
+        if row.last_funding == 0:
+            row.last_funding = now
+        for alias in perps:
+            inst = bot.instruments[alias]
+            since = min(row.last_funding, now - max(bot.lookback * tf, FUNDING_WINDOW_MS))
+            hist = await rt.markets[inst.price_venue].funding(inst.price_symbol, since, now)
+            funding[alias] = hist
+            for f in hist:
+                if f.time > row.last_funding:
+                    settle_funding(pf, inst, alias, f.rate, prices[alias] / (1 + f.premium))
+        if perps:
+            row.last_funding = max([row.last_funding] + [f.time for fs in funding.values() for f in fs])
 
-    bars = {}
-    for alias, inst in bot.instruments.items():
-        bars[alias] = await rt.markets[inst.price_venue].recent(inst.price_symbol, bot.timeframe, bot.lookback, now)
+        bars = {}
+        for alias, inst in bot.instruments.items():
+            bars[alias] = await rt.markets[inst.price_venue].recent(inst.price_symbol, bot.timeframe, bot.lookback, now)
+    except Exception as e:
+        # まだ一度も動いていない bot (last_candle = 0) は「ひとつ前の足までは済み」として戻す。
+        # そうしないと取り逃しが始まった時点が分からず、いつまでも warn のままになる
+        retry_to = claimed_from if claimed_from > 0 else latest_closed - tf
+        await store.release_candle(bot.id, retry_to, latest_closed)
+        # すでに 1 本ぶん取り逃しているなら、黙って遅れ続けないよう普通のエラーにする
+        if retry_to < latest_closed - tf:
+            raise
+        raise CandleRetry(f"{type(e).__name__}: {e}") from e
+
     short = [a for a, cs in bars.items() if len(cs) < bot.lookback]
     if short:
         await store.add_event(bot.id, "warn", f"not enough candles for {short}", now)

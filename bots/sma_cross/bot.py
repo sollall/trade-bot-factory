@@ -1,4 +1,4 @@
-from tbf import Bot, Context, Decision, Risk
+from tbf import Bot, Context, Decision, Risk, spot
 from tbf.core import indicators as ind
 
 
@@ -15,7 +15,11 @@ def strategy(ctx: Context):
 bot = Bot(
     id="sma_cross",
     description="短期 SMA が長期 SMA を上回っている間ロング",
-    symbol="BTCUSDT",
+    instruments={
+        # 価格・足は Coinbase から取る。Binance は Cloudflare Workers から安定して取れない
+        # (発注先は venue のまま。実測と理由は docs/market-data.md / TRA-81)
+        "BTCUSDT": spot("BTCUSDT", price_source=("coinbase", "BTC-USD")),
+    },
     timeframe="1h",
     lookback=60,
     capital=1000,

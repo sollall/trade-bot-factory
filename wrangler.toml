@@ -7,7 +7,7 @@
 name = "trade-bot"
 main = ".build/entry.py"
 compatibility_date = "2026-10-01"
-compatibility_flags = ["python_workers"]
+compatibility_flags = ["python_workers", "disable_python_external_sdk"]
 
 [observability]
 enabled = true
@@ -23,7 +23,7 @@ crons = ["* * * * *", "5 0 * * *"]
 [[env.paper.d1_databases]]
 binding = "DB"
 database_name = "trade-bot-paper"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "7e5372bb-f15a-44da-af60-4f6986e9b1d4"
 migrations_dir = "migrations"
 
 [env.live]
@@ -36,5 +36,5 @@ crons = ["* * * * *", "5 0 * * *"]
 [[env.live.d1_databases]]
 binding = "DB"
 database_name = "trade-bot-live"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "f9b81dcb-d4b8-4948-a69e-00e083087c26"
 migrations_dir = "migrations"

@@ -108,6 +108,13 @@ class Store:
         )
         return n > 0
 
+    async def release_candle(self, bot_id: str, candle: int, claimed: int) -> None:
+        """取った処理権を戻す。発注の前に落ちたときだけ呼ぶ (次の tick で同じ足をやり直す)。
+        自分が取った値のままのときしか戻さないので、別の実行が先に進んでいたら何もしない"""
+        await self.db.execute(
+            "UPDATE bot_state SET last_candle = ? WHERE bot_id = ? AND last_candle = ?", (candle, bot_id, claimed)
+        )
+
     async def save_monitor(self, r: BotRow) -> None:
         """監視用フィールドだけ更新 (口座は触らないので並行実行でも安全)"""
         await self.db.execute(

@@ -6,13 +6,15 @@ import json
 from dataclasses import dataclass
 
 from tbf.core.types import HOUR, TIMEFRAME_MS, Candle, FundingPoint
-from tbf.http import Http
+from tbf.http import Http, request_retrying
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
 
 
 async def _post(http: Http, body: dict, url: str = INFO_URL):
-    status, text = await http.request("POST", url, {"content-type": "application/json"}, json.dumps(body))
+    # 429 は少し待って取り直す。Cloudflare の出口IPは他の利用者と共有なので、
+    # 自分が毎分 1 回しか叩いていなくても踏む (TRA-81 の実測で 13 回中 3 回)
+    status, text = await request_retrying(http, "POST", url, {"content-type": "application/json"}, json.dumps(body))
     if status != 200:
         raise RuntimeError(f"hyperliquid {body.get('type')}: HTTP {status} {text[:200]}")
     return json.loads(text)

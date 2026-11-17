@@ -13,7 +13,11 @@ def strategy(ctx: Context):
 bot = Bot(
     id="eth_funding_hedged",
     description="比較用: ヘッジしたまま持ちっぱなし",
-    instruments={"spot": spot("ETHUSDT"), "perp": perp("ETH")},
+    instruments={
+        # 価格・足は Coinbase から (Binance は Workers から取れない。docs/market-data.md)
+        "spot": spot("ETHUSDT", price_source=("coinbase", "ETH-USD")),
+        "perp": perp("ETH"),
+    },
     timeframe="1h",
     lookback=1,
     capital=10_000,

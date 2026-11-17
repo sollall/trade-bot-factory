@@ -90,9 +90,17 @@ class Instrument:
     # 指値が約定しなかったときの方針
     unfilled: Unfilled = "market"
     # 価格データの取得元 (取引所, 銘柄)。省略すると (venue, symbol) をそのまま使う。
+    # 取得元の名前は tbf.market.MARKET_VENUES にあるもの、銘柄名はその取引所の表記
+    # (Coinbase は BTC-USD、Binance は BTCUSDT、Hyperliquid は BTC)。
     #
-    # 【近似】国内業者 (gmo / bitbank) の板は JPY 建てで、tbf/market/ に JPY 足の取り込みがない。
-    # そのため国内の現物レッグでも価格・足は Binance の USDT 建て (BTCUSDT / ETHUSDT) で代用する。
+    # 【近似 1】現物の価格・足は Coinbase の USD 建て。Binance / Bybit は Cloudflare Workers の
+    # US colo から必ず弾かれ、本番だけ毎 tick 落ちるので使えない (TRA-81, docs/market-data.md)。
+    # Binance 現物を基準にした実測 (1h 足・直近 1000 時間) では、水準は BTC -12.6bps / ETH -12.1bps
+    # (USD と USDT の差で、建値が一律ずれるだけ)、1h リターン差の年率σ は BTC 1.26% / ETH 1.37%、
+    # 相関 0.9995。バックテストも同じ Coinbase を使うので、この 2 つの間にずれは残らない。
+    #
+    # 【近似 2】国内業者 (gmo / bitbank) の板は JPY 建てで、tbf/market/ に JPY 足の取り込みがない。
+    # そのため国内の現物レッグでも価格・足は上記の USD 建てで代用する。
     # TRA-50 §1-5 の実測では、為替の共通成分を落とした「銘柄固有の内外価格差」は
     # 日次 約4.95bps・年率σ 0.94%、水準の平均は -0.50bps。向きの偏りがないので年率リターンには効かず、
     # ぶれ (シャープ) だけが増える。手数料・スリッページは会場ごとの実測値を使うので近似ではない。

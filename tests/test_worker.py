@@ -243,3 +243,96 @@ def test_binance_order_parsing_and_rounding():
     assert bf.fill.qty == pytest.approx(0.999) and bf.fill.instrument == "main"
     assert bf.fill.fee == pytest.approx(0.1)
     assert bf.fill.qty * bf.fill.price + bf.fill.fee == pytest.approx(100)
+
+
+async def test_bots_sharing_a_candle_fetch_it_once_per_tick():
+    """同じ銘柄・同じ足を見ている bot が何本あっても、取得は 1 tick に 1 回。
+    13:00 UTC の確定足で Coinbase の 429 (流量制限) を踏んだのは、これが 6 本重なったため (TRA-81)。
+    短い lookback の bot も、まとめて取った足の新しい側を使う"""
+
+    class Counting(FakeMarket):
+        def __init__(self):
+            super().__init__()
+            self.recent_calls = []
+
+        async def recent(self, symbol, timeframe, count, now):
+            self.recent_calls.append((symbol, timeframe, count))
+            return await super().recent(symbol, timeframe, count, now)
+
+    seen: dict[str, int] = {}
+
+    def strategy_for(bot_id):
+        def strategy(ctx):
+            seen[bot_id] = len(ctx.closes)
+            return 0
+
+        return strategy
+
+    db, market = make_db(), Counting()
+    bots = [
+        Bot(
+            id=f"look{n}", symbol="BTCUSDT", timeframe="1h", lookback=n, capital=1000,
+            risk=Risk(max_drawdown=0.2), strategy=strategy_for(f"look{n}"),
+        )
+        for n in (5, 20, 50)
+    ]
+    await make_app(bots, db, {"binance": market}).scheduled("* * * * *", NOW)
+
+    assert market.recent_calls == [("BTCUSDT", "1h", 50)]
+    assert seen == {"look5": 5, "look20": 20, "look50": 50}
+    assert not await db.query("SELECT * FROM events WHERE level='error'")
+
+
+class FlakyCandles(FakeMarket):
+    """最初の fails 回だけ足の取得が 429 で落ちる取得元"""
+
+    def __init__(self, fails=1):
+        super().__init__()
+        self.fails = fails
+        self.calls = 0
+
+    async def recent(self, symbol, timeframe, count, now):
+        self.calls += 1
+        if self.calls <= self.fails:
+            raise RuntimeError('HTTP 429 {"message":"Public rate limit exceeded"}')
+        return await super().recent(symbol, timeframe, count, now)
+
+
+async def errors_in_last_tick(db):
+    return (await db.query("SELECT errors FROM heartbeat WHERE name='tick'"))[0]["errors"]
+
+
+async def events(db, bot_id):
+    return [(r["level"], r["message"]) for r in await db.query("SELECT * FROM events WHERE bot_id=? ORDER BY id", (bot_id,))]
+
+
+async def test_a_candle_that_could_not_be_fetched_is_retried_on_the_next_tick():
+    """429 で足が取れなかった足の判断を落とさない。処理権を戻して次の tick でやり直す。
+    戻さないと last_candle が進んだままになり、その足の売買が永久に飛ぶ (TRA-81)"""
+    db, http, market = make_db(), FakeHttp(), FlakyCandles(fails=1)
+    app = make_app([single_bot()], db, {"binance": market}, http)
+
+    await app.scheduled("* * * * *", NOW)
+    assert await errors_in_last_tick(db) == 0  # 取り逃しではないのでエラーに数えない
+    assert [lvl for lvl, _ in await events(db, "up")] == ["warn"]
+    assert not await db.query("SELECT * FROM fills")
+    assert (await state(db, "up"))["last_candle"] < NOW // HOUR * HOUR - HOUR  # 処理権は戻っている
+
+    await app.scheduled("* * * * *", NOW + 60_000)  # 同じ足でやり直す
+    assert len(await db.query("SELECT * FROM fills")) == 1
+    assert (await state(db, "up"))["last_candle"] == NOW // HOUR * HOUR - HOUR
+    assert not [m for lvl, m in await events(db, "up") if lvl == "error"]
+
+
+async def test_a_candle_missed_for_a_whole_period_is_reported_as_an_error():
+    """1 本ぶん取り逃したら、黙って遅れ続けないようにエラーとして出す"""
+    db, market = make_db(), FlakyCandles(fails=99)
+    app = make_app([single_bot()], db, {"binance": market})
+
+    await app.scheduled("* * * * *", NOW)  # 1 本目: 取り直す (warn)
+    assert await errors_in_last_tick(db) == 0
+    await app.scheduled("* * * * *", NOW + HOUR)  # 次の足も取れない: エラー
+    assert await errors_in_last_tick(db) == 1
+    assert [lvl for lvl, _ in await events(db, "up")] == ["warn", "error"]
+    # 処理権は毎回戻しているので、取れるようになれば次の足から再開できる
+    assert (await state(db, "up"))["last_candle"] < (NOW + HOUR) // HOUR * HOUR - HOUR

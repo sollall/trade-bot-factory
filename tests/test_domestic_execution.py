@@ -199,8 +199,8 @@ def test_carry_bots_trade_spot_domestically_on_paper_only(bot_id):
     assert spot_leg.venue in ("gmo", "bitbank")
     assert spot_leg.order_type == "limit" and spot_leg.unfilled == "market"
     assert bot.deploy == ("paper",)
-    # 価格データは Binance のまま (国内業者の JPY 足は取り込んでいない)
-    assert spot_leg.price_source == ("binance", spot_leg.symbol)
+    # 価格データは Coinbase の USD 建て (国内業者の JPY 足は取り込んでいない)
+    assert spot_leg.price_source == ("coinbase", spot_leg.symbol.replace("USDT", "-USD"))
     assert spot_leg.fees == default_fees(spot_leg.venue, "spot", spot_leg.symbol)
 
 
@@ -211,7 +211,7 @@ def test_domestic_spot_cannot_be_deployed_live(bot_id):
 
 
 @pytest.mark.parametrize("bot_id", CARRY_BOTS)
-async def test_price_data_is_fetched_from_binance_not_the_domestic_venue(bot_id):
+async def test_price_data_is_fetched_from_coinbase_not_the_domestic_venue(bot_id):
     bot = load_bot(bot_id)
     asked: list[tuple[str, str]] = []
 
@@ -226,8 +226,8 @@ async def test_price_data_is_fetched_from_binance_not_the_domestic_venue(bot_id)
         async def funding(self, symbol, start, end):
             return [FundingPoint(start, 0.0, 0.0)]
 
-    markets = {"binance": FakeMarket("binance"), "hyperliquid": FakeMarket("hyperliquid")}
+    markets = {"coinbase": FakeMarket("coinbase"), "hyperliquid": FakeMarket("hyperliquid")}
     bars, _ = await load_bot_data(bot, 0, 3 * H, None, markets)
     assert set(bars) == {"spot", "perp"}
-    assert ("binance", bot.instruments["spot"].symbol) in asked
+    assert ("coinbase", bot.instruments["spot"].price_symbol) in asked
     assert not any(v in ("gmo", "bitbank") for v, _ in asked)
