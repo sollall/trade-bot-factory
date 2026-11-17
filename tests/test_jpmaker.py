@@ -31,6 +31,8 @@ from tbf.jpmaker.measure import (
     window_bounds,
 )
 from tbf.jpmaker.report import (
+    DAY_MS,
+    WindowRow,
     adverse_ratios,
     build_report,
     cut_verdicts,
@@ -600,3 +602,45 @@ def test_report_runs_end_to_end(tmp_path):
     assert "判定不能" not in verdict
     # 逆選択の基準の比較も出ること (切り方ごとに窓が足りなければその行は判定不能と書く)
     assert "総合: 平均基準" in text
+
+
+def _window_row(declared_apy: float | None, best_apy: float | None) -> WindowRow:
+    return WindowRow(
+        start=0,
+        end=DAY_MS,
+        window_days=1.0,
+        coverage=0.99,
+        declared_apy=declared_apy,
+        best_pair="render_jpy",
+        best_apy=best_apy,
+        prev_best_pair=None,
+        prev_best_apy=None,
+        n_fills=10,
+        n_measured=10,
+        net_jpy=-100.0,
+    )
+
+
+def test_efficiency_ratio_is_marked_when_it_cannot_be_read_as_a_share():
+    """宣言か最良が負の窓では、比を「最良の何割」として読めないことが行に出る。
+
+    両方負だと比 > 1 がむしろ悪い側 (宣言の方が深く負) なので、
+    印なしで 61.15 のような値を出すと「最良の 61 倍取れた」と読めてしまう。
+    """
+    # 両方負: 比は 2.0 だが、宣言の方が悪い
+    both_negative = _window_row(-2.0, -1.0)
+    assert both_negative.efficiency == pytest.approx(2.0)
+    assert both_negative.efficiency_meaningful is False
+    assert both_negative.gap_pp == pytest.approx(100.0)  # 最良が 100pp 上
+
+    # 符号が違う: 比が負になる
+    mixed = _window_row(-1.0, 0.5)
+    assert mixed.efficiency == pytest.approx(-2.0)
+    assert mixed.efficiency_meaningful is False
+    assert mixed.gap_pp == pytest.approx(150.0)
+
+    # 両方正: この場合だけ「最良の何割」として読める
+    both_positive = _window_row(0.1, 0.2)
+    assert both_positive.efficiency == pytest.approx(0.5)
+    assert both_positive.efficiency_meaningful is True
+    assert both_positive.gap_pp == pytest.approx(10.0)

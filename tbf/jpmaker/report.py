@@ -400,6 +400,24 @@ class WindowRow:
             return None
         return self.declared_apy / self.best_apy
 
+    @property
+    def efficiency_meaningful(self) -> bool:
+        """比を「最良の何割を取れたか」として読めるか。
+
+        宣言側か最良側のどちらかが負だと、比の大小が優劣に対応しない
+        (両方負なら比 > 1 がむしろ悪い側、符号が違えば比が負になる)。
+        """
+        if self.declared_apy is None or not self.best_apy:
+            return False
+        return self.declared_apy >= 0 and self.best_apy > 0
+
+    @property
+    def gap_pp(self) -> float | None:
+        """最良設定との差 (パーセントポイント)。符号に関係なく読める"""
+        if self.declared_apy is None or self.best_apy is None:
+            return None
+        return (self.best_apy - self.declared_apy) * 100.0
+
 
 def walkforward(
     m: Measurement,
@@ -443,13 +461,15 @@ def section_walkforward(m: Measurement) -> str:
         f"   宣言グリッド = {len(m.data)} 銘柄すべてに両側を出す・保守側の約定率推定。",
         f"   床 {declared.FLOOR_APY * 100:.2f}% / 合格 {declared.PASS_APY * 100:.2f}% (床の {declared.PASS_MULTIPLE:.0f} 倍)。",
         f"   年率の分母: 投下資本 (在庫上限 + ヘッジ証拠金) と **実測秒数** (穴はゼロ埋めしない)。",
+        "   効率 = 宣言 / 窓内最良。`*` 付きは宣言側か最良側が負で、比を「最良の何割を取れたか」"
+        "として読めない行 (両方負なら比 > 1 がむしろ悪い側)。その行は 差(pp) = 最良 - 宣言 を見ること。",
     ]
     for size in declared.SIZES_JPY:
         for days in declared.WALK_WINDOW_DAYS:
             cap = declared.capital_jpy(size, len(m.data))
             out.append(f"\n-- 1 注文 {size / 10_000:.0f}万円 / {days:.0f} 日窓 (投下資本 ¥{cap:,.0f})")
             out.append(
-                "窓                     カバ   約定  測定  純益(円)      宣言(OOS)年率  窓内最良      最良年率  効率   前窓選抜のOOS"
+                "窓                     カバ   約定  測定  純益(円)      宣言(OOS)年率  窓内最良      最良年率  効率     差(pp)  前窓選抜のOOS"
             )
             rows = walkforward(m, size, days)
             for r in rows:
@@ -458,10 +478,12 @@ def section_walkforward(m: Measurement) -> str:
                     why = "カバレッジ不足" if r.coverage < declared.MIN_WINDOW_COVERAGE else "窓が短い"
                     skip = f"  <- {why} ({r.span_ratio * 100:.0f}% の窓幅) のため判定から除外"
                 eff = r.efficiency
+                eff_s = "  n/a" if eff is None else f"{eff:5.2f}{'' if r.efficiency_meaningful else '*'}"
+                gap_s = "    n/a" if r.gap_pp is None else f"{r.gap_pp:7.1f}"
                 out.append(
                     f"{_ts(r.start)}->{_ts(r.end)}  {r.coverage * 100:4.0f}% {r.n_fills:>6} {r.n_measured:>5} "
                     f"{r.net_jpy:>11,.0f}  {_pct(r.declared_apy)}  {r.best_pair:<11} {_pct(r.best_apy)} "
-                    f"{('  n/a' if eff is None else f'{eff:5.2f}')}  "
+                    f"{eff_s:<7}{gap_s}  "
                     f"{(r.prev_best_pair or '-'):<11} {_pct(r.prev_best_apy)}{skip}"
                 )
             usable = [r for r in rows if r.usable]
