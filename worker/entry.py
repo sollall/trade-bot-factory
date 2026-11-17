@@ -13,6 +13,7 @@ from workers import Response, WorkerEntrypoint
 
 from bot_registry import BOTS
 from build_info import BUILD
+from tbf.http import with_user_agent
 from tbf.worker.app import App, Settings
 
 
@@ -53,7 +54,9 @@ class JsHttp:
     """tbf.http.Http を JS の fetch で実装"""
 
     async def request(self, method, url, headers=None, body=None):
-        opts = {"method": method, "headers": headers or {}}
+        # fetch は User-Agent を付けないので、手元の urllib と同じものを必ず付ける
+        # (付けないと Coinbase の candles が 400 を返す)
+        opts = {"method": method, "headers": with_user_agent(headers)}
         if body is not None:
             opts["body"] = body
         res = await js_fetch(url, to_js(opts, dict_converter=Object.fromEntries))

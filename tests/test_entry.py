@@ -57,6 +57,10 @@ class FakeFetchResponse:
 
 
 async def fake_fetch(url, opts):
+    # Coinbase の candles は User-Agent が無いと 400 を返す。本物と同じように断ることで、
+    # 「手元では通るのに Worker だけ毎 tick 落ちる」型の不具合をここで捕まえる (TRA-81)
+    if not {k.lower(): v for k, v in (opts.get("headers") or {}).items()}.get("user-agent"):
+        return FakeFetchResponse(400, json.dumps({"message": "User-Agent header is required."}))
     if "hyperliquid" in url:
         req = json.loads(opts["body"])
         cur = NOW // HOUR * HOUR
@@ -152,6 +156,29 @@ async def test_scheduled_and_fetch_through_entry(entry):
 
     req = types.SimpleNamespace(method="GET", url="https://w/", headers={})
     assert (await w.fetch(req)).status == 401
+
+
+async def test_js_http_always_sends_user_agent(entry, monkeypatch):
+    """fetch は User-Agent を付けないので JsHttp が付ける。手元の urllib と同じ値にする"""
+    import js
+
+    from tbf.http import USER_AGENT
+
+    seen = {}
+
+    async def spy(url, opts):
+        seen.update(opts)
+        return FakeFetchResponse(200, "{}")
+
+    monkeypatch.setattr(js, "fetch", spy)
+    monkeypatch.setattr(entry, "js_fetch", spy)
+
+    await entry.JsHttp().request("GET", "https://api.exchange.coinbase.com/products/BTC-USD/candles")
+    assert seen["headers"]["user-agent"] == USER_AGENT
+
+    # 呼び出し側が渡すヘッダは消えない (Hyperliquid の content-type)
+    await entry.JsHttp().request("POST", "https://x/info", {"content-type": "application/json"}, "{}")
+    assert seen["headers"] == {"user-agent": USER_AGENT, "content-type": "application/json"}
 
 
 def test_d1_null_substitution(entry):
