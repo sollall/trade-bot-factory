@@ -1,6 +1,6 @@
 # TRA-33 one-shot PR workflow の結果
 
-- 実行: https://github.com/sollall/trade-bot-factory/actions/runs/44190344404
+- 実行: https://github.com/sollall/trade-bot-factory/actions/runs/44191923706
 - PR 番号: ``
 - open: `failure` / comment: `skipped` / merge: `skipped`
 
