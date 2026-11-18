@@ -202,8 +202,43 @@ def test_hedge_cost_includes_taker_legs_and_reports_drift():
     # 在庫を売ってヘッジする間に中値が下がった = 時間差の間の値動きは損側
     assert h["drift"] == pytest.approx(0.01)
     assert h["used_delay_ms"] == pytest.approx(2000)
+    # 別の標本が当たったので drift は測れている
+    assert h["drift_resolved"] is True
     # 板の記録が無い時刻は None (ゼロ埋めしない)
     assert hedge_cost(fill, samples, times, delay_ms=600_000, tolerance_sec=10.0) is None
+
+
+def test_drift_zero_from_same_sample_is_marked_unresolved():
+    """標本間隔より時間差が短いと約定時点とヘッジ時点で同じ板が当たる。
+
+    その drift は構造的に 0 なので「動かなかった」と読めない。`drift_resolved=False`
+    で印を付け、レポートの値動き列から外す (0 を混ぜて p50 を 0 にしないため)。
+    """
+    deep = [(100.0, 1000.0)]
+    samples = [HlSample(T0, deep, deep), HlSample(T0 + 5000, [(99.0, 1000.0)], [(99.0, 1000.0)])]
+    times = [s.time for s in samples]
+    fill = Fill(T0, "p", "buy", 100.0, 10_000.0, 100.0, "conservative")
+    # 時間差 1 秒 < 標本間隔 5 秒 -> 約定時点とヘッジ時点がどちらも T0 の標本になる
+    h = hedge_cost(fill, samples, times, delay_ms=1000, tolerance_sec=10.0)
+    assert h["drift"] == pytest.approx(0.0)
+    assert h["drift_resolved"] is False
+    # スリッページとテイカーは従来どおり測れている (式は変えていない)
+    assert h["cost_ratio"] == pytest.approx(h["slippage"] + h["taker"])
+
+
+def test_used_delay_can_be_negative_when_nearest_sample_precedes_fill():
+    """許容幅の中で最も近い標本を使うので、約定より前の板で測ることがある。
+
+    これはスリッページを「約定の後」ではなく「約定の前」の板で測っている状態なので、
+    レポートに負の件数を出して読み手が気付けるようにする。
+    """
+    deep = [(100.0, 1000.0)]
+    samples = [HlSample(T0 - 4000, deep, deep), HlSample(T0 + 9000, deep, deep)]
+    times = [s.time for s in samples]
+    fill = Fill(T0, "p", "buy", 100.0, 10_000.0, 100.0, "conservative")
+    h = hedge_cost(fill, samples, times, delay_ms=1000, tolerance_sec=10.0)
+    assert h["used_delay_ms"] == pytest.approx(-4000)
+    assert h["drift_resolved"] is False
 
 
 # --- 純益と年率換算 ---

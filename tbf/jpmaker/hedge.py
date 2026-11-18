@@ -86,7 +86,13 @@ def hedge_cost(
       cost_ratio    純益の式に入れる合計 = slippage + taker
       drift         ヘッジが入るまでの時間差の間に HL の中値が動いた分 (**式には入れない**。
                     依頼票 4 の「時間差の間の値動き」として別に報告する)
-      used_delay_ms 実際に使えた標本までの時間差
+      drift_resolved 約定時点とヘッジ時点で **別の板の標本が当たったか**。
+                    False なら同じ標本を 2 回見ているので drift は構造的に 0 になる
+                    (= 測れていない)。l2Book を 5 秒間隔で取っているのに対し時間差が
+                    1 秒ほどしかないため、大半の約定で False になる。
+                    **0 を「動かなかった」と読まないための印。**
+      used_delay_ms 実際に使えた標本までの時間差。許容幅の中で最も近い標本を使うので
+                    **負になりうる** (= 約定より前の板でスリッページを測っている)
     """
     tol = tolerance_sec if tolerance_sec is not None else max(3.0, declared.HL_POLL_SEC * 2)
     at_fill = _sample_at(samples, times, fill.time, tol)
@@ -106,5 +112,6 @@ def hedge_cost(
         "taker": taker,
         "cost_ratio": slip + taker,
         "drift": drift,
+        "drift_resolved": at_hedge.time != at_fill.time,
         "used_delay_ms": float(at_hedge.time - fill.time),
     }

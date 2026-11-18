@@ -267,7 +267,17 @@ def section_hedge(m: Measurement) -> str:
         f"   ヘッジまでの時間差は **下限** {m.delay_ms:.0f}ms "
         f"(約定検知 {declared.FILL_DETECTION_FLOOR_MS:.0f}ms + l2Book 往復 p50 の実測)。実際はこれより遅い。",
         f"   対象は {declared.DECISION_MODE} 側の約定。",
-        "銘柄        サイズ  スリッページ p50   p95   テイカー  時間差中の値動き p50  板不足  使った時間差 p50",
+        "   **時間差中の値動きは、この標本間隔では大半の約定で測れていない。** l2Book は "
+        f"{declared.HL_POLL_SEC:.0f} 秒間隔なのに時間差は {m.delay_ms:.0f}ms しかないので、"
+        "約定時点とヘッジ時点で同じ標本が当たると値動きは構造的に 0 になる。",
+        "   `値動き` 列は **別の標本が当たった約定だけ** の p50/p90 で、その件数を併記する。"
+        "0 を「動かなかった」と読まないこと。値動きは純益の式には入っていない (宣言どおり)。",
+        f"   ただしその列も時間差 {m.delay_ms:.0f}ms ぶんではなく **標本 1 つぶん "
+        f"(実差 p50 約 {declared.HL_POLL_SEC:.0f} 秒)** の値動きなので、真の値動きより大きい側に出る。"
+        "この列は上限側の目安で、下限側は 0 ではないという以上のことは言えない。",
+        "   `使った時間差` は許容幅の中で最も近い標本までの実差で、**負なら約定より前の板で"
+        "スリッページを測っている**。負の件数も出す。",
+        "銘柄        サイズ  スリッページ p50   p95   テイカー   値動き(測れた分) p50    p90   測れた件数        使った時間差 p50   負の件数  板不足",
     ]
     for pair in m.data:
         for size in declared.SIZES_JPY:
@@ -278,12 +288,20 @@ def section_hedge(m: Measurement) -> str:
                 out.append(f"{pair:<11} {size / 10_000:>5.0f}万  (測れた約定なし)  板不足/未測定 {short}")
                 continue
             slips = [h["slippage"] for h in got]
-            drifts = [abs(h["drift"]) for h in got]
+            drifts = [abs(h["drift"]) for h in got if h.get("drift_resolved")]
             delays = [h["used_delay_ms"] for h in got]
+            negative = sum(1 for d in delays if d < 0)
+            if drifts:
+                drift_cols = (
+                    f"{_bps(statistics.median(drifts))} {_bps(percentile(drifts, 0.90))} "
+                    f"{len(drifts):>5}/{len(got)}"
+                )
+            else:
+                drift_cols = f"  測れた約定なし        0/{len(got)}"
             out.append(
                 f"{pair:<11} {size / 10_000:>5.0f}万  {_bps(statistics.median(slips))} {_bps(percentile(slips, 0.95))} "
-                f"  {_bps(declared.HL_TAKER_FEE * declared.HL_TAKER_LEGS)}  {_bps(statistics.median(drifts))}        "
-                f"{short:>5}  {statistics.median(delays):>12.0f}ms"
+                f"  {_bps(declared.HL_TAKER_FEE * declared.HL_TAKER_LEGS)}   {drift_cols}"
+                f"        {statistics.median(delays):>8.0f}ms  {negative:>8}  {short:>5}"
             )
     return "\n".join(out)
 
