@@ -27,7 +27,7 @@ jobs:
 
       - name: Open PR (idempotent, 設定が入るまで待つ)
         id: open
-        timeout-minutes: 35
+        timeout-minutes: 340
         continue-on-error: true
         run: |
           set -o pipefail
@@ -36,10 +36,10 @@ jobs:
             echo "branch $HEAD_BRANCH が origin にありません" | tee -a "$RUNNER_TEMP/create.log"
             exit 1
           fi
-          # "Allow GitHub Actions to create and approve pull requests" が入るまで 1 分おきに再試行する。
+          # "Allow GitHub Actions to create and approve pull requests" が入るまで 1 分おきに再試行する (最長 5.5 時間)。
           # 設定が入っていない間の失敗メッセージは 1 回だけ記録する (ログを膨らませない)。
           num=""
-          for i in $(seq 1 30); do
+          for i in $(seq 1 330); do
             num=$(gh pr list --head "$HEAD_BRANCH" --base "$BASE" --state open --json number --jq '.[].number' | head -1)
             if [ -n "$num" ]; then
               echo "試行 $i: PR #$num が開いています" | tee -a "$RUNNER_TEMP/create.log"
@@ -57,11 +57,11 @@ jobs:
               echo "試行 1 の失敗内容:" >> "$RUNNER_TEMP/create.log"
               printf '%s\n' "$out" >> "$RUNNER_TEMP/create.log"
             fi
-            echo "試行 $i: まだ作成できません (1 分待って再試行)"
+            if [ $(( i % 30 )) -eq 0 ]; then echo "試行 $i: まだ作成できません ($(date -u +%H:%MZ))"; fi
             sleep 60
           done
           if [ -z "$num" ]; then
-            echo "30 分待ちましたが PR を作成できませんでした (設定が入っていない可能性)" >> "$RUNNER_TEMP/create.log"
+            echo "5.5 時間待ちましたが PR を作成できませんでした (設定が入っていない可能性)" >> "$RUNNER_TEMP/create.log"
             exit 1
           fi
           echo "pr=$num" >> "$GITHUB_OUTPUT"
