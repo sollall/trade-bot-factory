@@ -25,24 +25,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Open PR (idempotent)
+      - name: Open PR (idempotent, 設定が入るまで待つ)
         id: open
+        timeout-minutes: 35
         continue-on-error: true
         run: |
           set -o pipefail
+          : > "$RUNNER_TEMP/create.log"
           if ! git ls-remote --exit-code --heads origin "$HEAD_BRANCH" >/dev/null; then
-            echo "branch $HEAD_BRANCH が origin にありません" | tee "$RUNNER_TEMP/create.log"
+            echo "branch $HEAD_BRANCH が origin にありません" | tee -a "$RUNNER_TEMP/create.log"
             exit 1
           fi
-          num=$(gh pr list --head "$HEAD_BRANCH" --base "$BASE" --state open --json number --jq '.[].number' | head -1)
-          if [ -n "$num" ]; then
-            echo "PR #$num が既に開いています" | tee "$RUNNER_TEMP/create.log"
-          else
-            gh pr create --base "$BASE" --head "$HEAD_BRANCH" \
-              --title "$TITLE" --body-file .github/tra33-pr.md 2>&1 | tee "$RUNNER_TEMP/create.log"
+          # "Allow GitHub Actions to create and approve pull requests" が入るまで 1 分おきに再試行する。
+          # 設定が入っていない間の失敗メッセージは 1 回だけ記録する (ログを膨らませない)。
+          num=""
+          for i in $(seq 1 30); do
             num=$(gh pr list --head "$HEAD_BRANCH" --base "$BASE" --state open --json number --jq '.[].number' | head -1)
+            if [ -n "$num" ]; then
+              echo "試行 $i: PR #$num が開いています" | tee -a "$RUNNER_TEMP/create.log"
+              break
+            fi
+            out=$(gh pr create --base "$BASE" --head "$HEAD_BRANCH" \
+              --title "$TITLE" --body-file .github/tra33-pr.md 2>&1) && rc=0 || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "試行 $i: 作成しました" | tee -a "$RUNNER_TEMP/create.log"
+              printf '%s\n' "$out" >> "$RUNNER_TEMP/create.log"
+              num=$(gh pr list --head "$HEAD_BRANCH" --base "$BASE" --state open --json number --jq '.[].number' | head -1)
+              break
+            fi
+            if [ "$i" = "1" ]; then
+              echo "試行 1 の失敗内容:" >> "$RUNNER_TEMP/create.log"
+              printf '%s\n' "$out" >> "$RUNNER_TEMP/create.log"
+            fi
+            echo "試行 $i: まだ作成できません (1 分待って再試行)"
+            sleep 60
+          done
+          if [ -z "$num" ]; then
+            echo "30 分待ちましたが PR を作成できませんでした (設定が入っていない可能性)" >> "$RUNNER_TEMP/create.log"
+            exit 1
           fi
-          [ -n "$num" ] || { echo "PR 番号が取れませんでした" | tee -a "$RUNNER_TEMP/create.log"; exit 1; }
           echo "pr=$num" >> "$GITHUB_OUTPUT"
 
       - name: Comment on PR
