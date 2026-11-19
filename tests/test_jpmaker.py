@@ -37,6 +37,7 @@ from tbf.jpmaker.report import (
     build_report,
     cut_verdicts,
     overall_verdict,
+    section_adverse,
     section_adverse_basis_flip,
     section_adverse_distribution,
     section_uptime,
@@ -426,6 +427,27 @@ def test_adverse_distribution_reports_both_median_and_mean():
     assert "平均" in text and "中央値" in text and "平均/中央値" in text
     # 1 bp と 500 bp の両方が行に出ている (中央値だけを報告しない)
     assert "   1.0" in text and " 500.0" in text
+
+
+def test_adverse_unmeasured_count_is_per_horizon_not_one_total():
+    """未測定件数を 4 つの時点の合計で出すと、どの列が欠けているか読めない
+
+    長い時点 (1800s) は記録の端で欠けやすく、判定に効く 60s は欠けていない、という
+    形が実データで起きる。合計 1 本だと両者を区別できないので列ごとに出す。
+    """
+    m = _measurement_with_outlier_fills(n_windows=1)
+    econs = m.econs[("render_jpy", "buy", 50_000.0, "conservative")]
+    assert len(econs) == 10
+    # 10 件のうち 3 件で 1800s だけ測れていない形にする (60s は全件測れている)
+    for e in econs[:3]:
+        e.adverse[1800] = None
+
+    text = section_adverse(m)
+    line = next(ln for ln in text.splitlines() if ln.startswith("render_jpy") and "5万" in ln)
+    assert "0/0/0/3 (全 10 件)" in line, line
+    # 合計 (3) 1 本だけに丸めた形に戻っていないこと
+    assert "   3 " not in line.replace("0/0/0/3", "")
+    assert "未測定 (10s/60s/300s/1800s)" in text
 
 
 # --- 設定が宣言グリッドを動かせないこと ---

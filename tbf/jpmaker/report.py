@@ -89,7 +89,18 @@ def section_adverse(m: Measurement) -> str:
         f"   純益の式に入れるのは {declared.ADVERSE_HORIZON_FOR_NET_SEC} 秒の列だけ (事前宣言)。他は感度。",
         f"   対象は **{declared.DECISION_MODE} 側 (判定に使う推定)** の約定。単位は約定金額に対する bps (金額重み付き平均)。",
     ]
-    head = "銘柄        サイズ  半スプレッド " + " ".join(f"{h:>5}s" for h in declared.ADVERSE_HORIZONS_SEC) + "   未測定件数"
+    horizons = "/".join(f"{h}s" for h in declared.ADVERSE_HORIZONS_SEC)
+    out.append(
+        f"   未測定件数は **列ごと** に出す ({horizons} の順)。"
+        f"ひとつの合計にすると、どの列が欠けているか読めない。"
+        f"判定に効くのは {declared.ADVERSE_HORIZON_FOR_NET_SEC}s の欠けだけで、"
+        "長い列は記録の端 (先の中値がまだ無い約定) で欠けやすい。"
+    )
+    head = (
+        "銘柄        サイズ  半スプレッド "
+        + " ".join(f"{h:>5}s" for h in declared.ADVERSE_HORIZONS_SEC)
+        + f"   未測定 ({horizons})"
+    )
     out.append(head)
     for pair in m.data:
         for size in declared.SIZES_JPY:
@@ -99,16 +110,17 @@ def section_adverse(m: Measurement) -> str:
                 continue
             notional = sum(e.fill.notional_jpy for e in econs)
             hs = sum(e.half_spread * e.fill.notional_jpy for e in econs) / notional if notional else 0.0
-            cols, miss = [], 0
+            cols, miss = [], []
             for h in declared.ADVERSE_HORIZONS_SEC:
                 vals = [(e.adverse[h], e.fill.notional_jpy) for e in econs if e.adverse[h] is not None]
-                miss += len(econs) - len(vals)
+                miss.append(len(econs) - len(vals))
                 if not vals:
                     cols.append("   n/a")
                     continue
                 den = sum(w for _, w in vals)
                 cols.append(f"{sum(v for v, _ in vals) / den * 10_000:6.1f}" if den else "   n/a")
-            out.append(f"{pair:<11} {size / 10_000:>5.0f}万  {_bps(hs)}      " + " ".join(cols) + f"   {miss:>6}")
+            miss_col = "/".join(str(n) for n in miss) + f" (全 {len(econs)} 件)"
+            out.append(f"{pair:<11} {size / 10_000:>5.0f}万  {_bps(hs)}      " + " ".join(cols) + f"   {miss_col}")
     return "\n".join(out)
 
 
