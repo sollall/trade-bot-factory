@@ -1,5 +1,13 @@
 # 使い捨ての workflow (TRA-33)。エージェントは GitHub の API トークンを持たず push しかできないので、
 # この branch への push で一度だけ PR の作成・コメント・マージを GITHUB_TOKEN で行う。
+#
+# 2026-11-19: 待ち受けの主経路を切り替えた。GITHUB_TOKEN による `gh pr create` はリポジトリ設定
+# ("Allow GitHub Actions to create and approve pull requests") が入るまで通らず、11-18/11-19 の
+# 2 回の待ち受けで合計 660 試行すべて拒否された。一方 **PR への コメントと マージは GITHUB_TOKEN で
+# できる** (禁止されているのは create と approve だけ)。そこでループは毎回まず
+# `gh pr list --head` で「オーナーが compare 画面から作った PR」を探し、見つかればそれに
+# コメントしてマージする。設定が入っていれば従来どおり create も試みる (どちらが先でもよい)。
+# → オーナーの操作は「Create pull request を押す」だけで済む。マージは押さなくてよい。
 # 結果は RESULT.md としてこの branch に push し返す (エージェントは git fetch でだけ読めるため)。
 # GITHUB_TOKEN による push は新しい workflow 実行を起こさないので再帰しない。
 # 実行後、この branch は削除する。main には入れない。
@@ -66,7 +74,7 @@ jobs:
             sleep 60 || true
           done
           if [ -z "$num" ]; then
-            echo "待ち受けが終わりましたが PR を作成できませんでした (設定が入っていない可能性)" >> "$RUNNER_TEMP/create.log"
+            echo "待ち受けが終わりました: オーナーが作った PR も見つからず、create も通りませんでした" >> "$RUNNER_TEMP/create.log"
             exit 1
           fi
           echo "pr=$num" >> "$GITHUB_OUTPUT"
