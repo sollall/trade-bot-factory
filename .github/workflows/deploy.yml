@@ -10,7 +10,15 @@ name: Deploy
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+    # Worker に入らないものだけの変更ではデプロイしない (文書、Claude Code の設定、VPS・監視の設定)。
+    # 「動かさないもの」を並べる形にしている: ここに書き漏らしても余計にデプロイされるだけで済む。
+    # 逆に「動かすもの」を並べると、書き漏らしたときに変更が本番に出ないまま気づけない。
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+      - "docs/**"
+      - "deploy/**"
+  workflow_dispatch:   # 上で飛ばした変更でも、手動なら動かせる
 
 # デプロイは常に 1 つずつ。実行中のデプロイは途中で止めない
 concurrency:
