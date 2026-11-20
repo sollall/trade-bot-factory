@@ -43,6 +43,7 @@ from tbf.jpmaker.report import (
     section_uptime,
     section_verdict,
     walkforward,
+    walkforward_row_line,
 )
 from tbf.jpmaker.sim import (
     BookSample,
@@ -701,3 +702,45 @@ def test_efficiency_ratio_is_marked_when_it_cannot_be_read_as_a_share():
     assert both_positive.efficiency == pytest.approx(0.5)
     assert both_positive.efficiency_meaningful is True
     assert both_positive.gap_pp == pytest.approx(10.0)
+
+
+def test_prev_pick_from_an_excluded_window_is_marked(tmp_path):
+    """判定から外した窓の最良銘柄を持ち越した行は、そう分かる形で出ること。
+
+    端数の窓 (窓幅不足で判定から除外) の最良を次の窓に当てた値が `前窓選抜のOOS`
+    に出るが、選抜の根拠が判定に使えない窓なので、他の行と同じ重さで読めない。
+    印が無いと判定に使える窓からの持ち越しと区別がつかない。
+    """
+    step_sec = 600  # 10 分窓。1 秒格子でカバレッジの線を満たしたまま小さく回す
+    days = step_sec / 86_400.0
+    grid = (T0 // (step_sec * 1000)) * step_sec * 1000
+    since = grid - 60_000  # 端数の窓 (1 分) → 窓幅 10%
+    until = grid + 2 * step_sec * 1000
+    store = JpMakerStore(tmp_path / "db.sqlite")
+    for pair, coin in declared.PAIRS.items():
+        for t in range(since, until, 1000):
+            store.add_book(t, t, pair, 99.0, 100.0, 101.0, 100.0, None)
+            store.add_hl_book(t, t, coin, [["1.0", "100000"]], [["1.01", "100000"]])
+    store.commit()
+    m = run_all(load(store, declared.PAIRS, since, until), since, until, 1.0, 1250.0)
+    rows = walkforward(m, 50_000.0, days)
+
+    assert len(rows) == 3
+    assert rows[0].coverage >= declared.MIN_WINDOW_COVERAGE  # 1 秒格子は埋まっている
+    assert rows[0].span_ratio < declared.MIN_WINDOW_SPAN_RATIO
+    assert rows[0].usable is False  # 端数の窓
+    # 先頭の行には持ち越し元が無いので印の対象外
+    assert rows[0].prev_best_pair is None
+    assert "†" not in walkforward_row_line(rows[0])
+    # 次の行は「判定から外した窓」の最良を持ち越している → 印が付く
+    assert rows[1].usable is True
+    assert rows[1].prev_best_pair is not None
+    assert rows[1].prev_best_from_usable_window is False
+    assert "†" in walkforward_row_line(rows[1])
+    # そのさらに次は、判定に使える窓からの持ち越し → 印は付かない
+    assert rows[2].prev_best_pair is not None
+    assert rows[2].prev_best_from_usable_window is True
+    assert "†" not in walkforward_row_line(rows[2])
+
+    # 印の意味が本文に書かれていること (印だけ出して説明が無いと読めない)
+    assert "†" in build_report(store, m)

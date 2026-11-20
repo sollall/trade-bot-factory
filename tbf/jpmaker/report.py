@@ -408,6 +408,9 @@ class WindowRow:
     n_fills: int
     n_measured: int
     net_jpy: float
+    # 銘柄を選んだ側の窓が判定に使える窓だったか。False の行は、判定から外した窓
+    # (窓幅不足・カバレッジ不足) の最良銘柄を持ち越している
+    prev_best_from_usable_window: bool = True
 
     @property
     def span_ratio(self) -> float:
@@ -459,6 +462,7 @@ def walkforward(
     mode = mode or declared.DECISION_MODE
     rows: list[WindowRow] = []
     prev_best: str | None = None
+    prev_best_usable = True
     for ws, we in window_bounds(m.since, m.until, days):
         per_pair, total = cells_for_window(m, ws, we, size, mode, adverse_basis)
         cov = total.measured_sec / ((we - ws) / 1000.0) if we > ws else 0.0
@@ -478,11 +482,31 @@ def walkforward(
                 n_fills=total.n_fills,
                 n_measured=total.n_measured,
                 net_jpy=total.net_jpy,
+                prev_best_from_usable_window=prev_best_usable,
             )
         )
         if best_apy is not None:
             prev_best = best_pair
+            prev_best_usable = rows[-1].usable
     return rows
+
+
+def walkforward_row_line(r: WindowRow) -> str:
+    """窓 1 行の表示。`*` は効率が share として読めない行、`†` は選抜元が判定から外した窓"""
+    skip = ""
+    if not r.usable:
+        why = "カバレッジ不足" if r.coverage < declared.MIN_WINDOW_COVERAGE else "窓が短い"
+        skip = f"  <- {why} ({r.span_ratio * 100:.0f}% の窓幅) のため判定から除外"
+    eff = r.efficiency
+    eff_s = "  n/a" if eff is None else f"{eff:5.2f}{'' if r.efficiency_meaningful else '*'}"
+    gap_s = "    n/a" if r.gap_pp is None else f"{r.gap_pp:7.1f}"
+    prev_mark = "†" if r.prev_best_pair is not None and not r.prev_best_from_usable_window else ""
+    return (
+        f"{_ts(r.start)}->{_ts(r.end)}  {r.coverage * 100:4.0f}% {r.n_fills:>6} {r.n_measured:>5} "
+        f"{r.net_jpy:>11,.0f}  {_pct(r.declared_apy)}  {r.best_pair:<11} {_pct(r.best_apy)} "
+        f"{eff_s:<7}{gap_s}  "
+        f"{(r.prev_best_pair or '-'):<11} {_pct(r.prev_best_apy)}{prev_mark}{skip}"
+    )
 
 
 def section_walkforward(m: Measurement) -> str:
@@ -493,6 +517,9 @@ def section_walkforward(m: Measurement) -> str:
         f"   年率の分母: 投下資本 (在庫上限 + ヘッジ証拠金) と **実測秒数** (穴はゼロ埋めしない)。",
         "   効率 = 宣言 / 窓内最良。`*` 付きは宣言側か最良側が負で、比を「最良の何割を取れたか」"
         "として読めない行 (両方負なら比 > 1 がむしろ悪い側)。その行は 差(pp) = 最良 - 宣言 を見ること。",
+        "   前窓選抜に `†` が付いた行は、銘柄を選んだ側の窓がこの表で判定から外した窓 "
+        "(窓幅不足かカバレッジ不足) であること。選抜の根拠が判定に使えない窓なので、"
+        "その持ち越しは他の行と同じ重さで読めない。",
     ]
     for size in declared.SIZES_JPY:
         for days in declared.WALK_WINDOW_DAYS:
@@ -503,19 +530,7 @@ def section_walkforward(m: Measurement) -> str:
             )
             rows = walkforward(m, size, days)
             for r in rows:
-                skip = ""
-                if not r.usable:
-                    why = "カバレッジ不足" if r.coverage < declared.MIN_WINDOW_COVERAGE else "窓が短い"
-                    skip = f"  <- {why} ({r.span_ratio * 100:.0f}% の窓幅) のため判定から除外"
-                eff = r.efficiency
-                eff_s = "  n/a" if eff is None else f"{eff:5.2f}{'' if r.efficiency_meaningful else '*'}"
-                gap_s = "    n/a" if r.gap_pp is None else f"{r.gap_pp:7.1f}"
-                out.append(
-                    f"{_ts(r.start)}->{_ts(r.end)}  {r.coverage * 100:4.0f}% {r.n_fills:>6} {r.n_measured:>5} "
-                    f"{r.net_jpy:>11,.0f}  {_pct(r.declared_apy)}  {r.best_pair:<11} {_pct(r.best_apy)} "
-                    f"{eff_s:<7}{gap_s}  "
-                    f"{(r.prev_best_pair or '-'):<11} {_pct(r.prev_best_apy)}{skip}"
-                )
+                out.append(walkforward_row_line(r))
             usable = [r for r in rows if r.usable]
             if usable:
                 apys = [r.declared_apy for r in usable]
