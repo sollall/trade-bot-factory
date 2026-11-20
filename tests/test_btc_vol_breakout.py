@@ -69,4 +69,4 @@ def test_position_is_smaller_when_volatility_is_high():
     r = backtest(load_bot(BOT_ID), bars(wild + [120.0, 121.0]))
     first = r.fills[0]
     weight = first.qty * first.price / 1000
-    assert 0.3 < weight < 0.5  # 目標 40% ÷ 実現 約 97%
+    assert 0.15 < weight < 0.25  # 目標 20% ÷ 実現 約 97%

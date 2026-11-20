@@ -75,6 +75,7 @@ bot = Bot(
     capital=1000,
     deploy=["paper"],
     risk=Risk(max_drawdown=0.25, max_daily_loss=0.1),
-    params={"entry_n": 20, "exit_n": 10, "target_vol": 0.4, "vol_window": 30, "resize_band": 0.1},
+    # target_vol=0.2 は人間の指示 (0.4 だと自然な DD が約 40% で、上の risk 上限に何度も当たる)
+    params={"entry_n": 20, "exit_n": 10, "target_vol": 0.2, "vol_window": 30, "resize_band": 0.1},
     strategy=strategy,
 )
