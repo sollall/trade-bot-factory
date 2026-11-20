@@ -7,9 +7,10 @@ bot を作って PR を main にマージすると、GitHub Actions が **paper 
  PR マージ (main)
    │
    ▼ deploy.yml
- check ─ pytest / D1 設定確認 / bot の読み込み・live 対応チェック (build_worker.py)
+ check ─ pytest / D1 設定確認 / bot の読み込み・live 対応チェック (build_worker.py) / live の bot 数を数える
    │
    ▼ deploy-worker.yml (paper)                       ▼ deploy-worker.yml (live, 承認を挟める)
+                                                       live の bot が 0 本なら飛ばす
  1 preflight  デプロイから外れる bot・消える銘柄に持ち高が残っていないか   ← live は止める
  2 bookmark   D1 Time Travel の現時点を記録 (データを戻すときの目印)
  3 migrate    D1 migration (追加のみ。旧版が動いたままでも壊れない)
@@ -77,7 +78,7 @@ live に大きな資金を入れる段階になったら、live だけ別アカ�
 | 1 つの bot のバグで全体が止まる | bot ごとに例外を捕まえて他の bot は動き続ける (エラーはイベント記録 + 通知)。`/healthz` の `last_tick_errors` と `/metrics` の `tbf_bot_errors_1h` にも出る |
 | migration で旧版が壊れる | migration は旧版が動いている間に適用されるので追加 (CREATE / ADD COLUMN) だけ。`tests/test_migrations.py` が DROP / RENAME / UPDATE / DELETE を落とす |
 | bot を消したらポジションが放置される | 1 preflight が D1 を見て止める (live)。デプロイ後も `/metrics` の `tbf_unmanaged_position_qty` と日次通知で知らせる |
-| paper で壊れたものが live に行く | live のジョブは paper の verify 成功後にしか動かない。live に Required reviewers を付ければ人の承認も挟める |
+| paper で壊れたものが live に行く | live のジョブは paper の verify 成功後にしか動かない。live に Required reviewers を付ければ人の承認も挟める (承認を求めるのは `deploy` に `live` を書いた bot が 1 本以上あるときだけ。0 本なら live の段を飛ばす) |
 | Worker が何かの理由で動かなくなる | 毎分 D1 に完了記録 (heartbeat) を書く。外部監視が `/healthz` (止まると 503) か `HEARTBEAT_URL` への ping で検知 |
 
 ## 初回の設定

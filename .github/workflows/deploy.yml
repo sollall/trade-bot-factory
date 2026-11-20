@@ -5,6 +5,8 @@
 #                    設定するとデプロイ後に /healthz で新しい版の cron 完了を確認し、だめなら直前の版に戻す
 #   ALLOW_UNMANAGED  (任意) 持ち高が残ったままデプロイから外すことを許す bot id (カンマ区切り)
 # live に Required reviewers を付けると本番デプロイ前に承認を挟める。
+# ただし live を宣言した bot が 0 本のときは live の段を飛ばすので、承認を求められるのは
+# 実際に live に出す bot があるときだけ (中身が空の Worker を置くための承認は求めない)。
 # 詳しくは docs/ops.md
 name: Deploy
 on:
@@ -12,14 +14,18 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# デプロイは常に 1 つずつ。実行中のデプロイは途中で止めない
+# デプロイは常に 1 つずつ。実行中のデプロイは途中で止めない。
+# group はブランチごと (= 実質 main のみ)。古い group で承認待ちのまま残っている実行に
+# 後続のデプロイが詰まらないようにする意味もある
 concurrency:
-  group: deploy
+  group: deploy-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    outputs:
+      live_bots: ${{ steps.live_bots.outputs.count }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -31,6 +37,12 @@ jobs:
             echo "::error::wrangler.toml の database_id が未設定です。npm run setup:cloudflare を実行してコミットしてください"
             exit 1
           fi
+      - name: Count bots deployed to live
+        id: live_bots
+        run: |
+          count=$(uv run python scripts/deploy_guard.py count --mode live)
+          echo "live に出す bot: $count 本" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
 
   paper:
     needs: check
@@ -39,9 +51,11 @@ jobs:
       target: paper
     secrets: inherit
 
-  # paper で新しい版が動いたことを確認してから live へ
+  # paper で新しい版が動いたことを確認してから live へ。
+  # live を宣言した bot が 0 本なら飛ばす (置くものが無いデプロイで承認を待たせない)
   live:
-    needs: paper
+    needs: [check, paper]
+    if: needs.check.outputs.live_bots != '0'
     uses: ./.github/workflows/deploy-worker.yml
     with:
       target: live

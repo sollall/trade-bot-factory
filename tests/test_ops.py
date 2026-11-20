@@ -118,6 +118,17 @@ def test_preflight(tmp_path):
     assert run_guard("preflight", "--mode", "live", "--rows", str(rows)).returncode == 0
 
 
+def test_count():
+    # deploy.yml が「live の段を飛ばすか」を決めるのに使う。bots/ の実際の deploy 指定と一致すること
+    from tbf.registry import load_all
+    from tbf.worker.runner import bots_for_mode
+
+    for mode in ("paper", "live"):
+        r = run_guard("count", "--mode", mode)
+        assert r.returncode == 0, r.stderr
+        assert int(r.stdout) == len(bots_for_mode(load_all(), mode))
+
+
 def test_unknown_instruments():
     rows = [{"bot_id": "carry", "portfolio": json.dumps({"positions": {"spot": [1, 1], "old_perp": [-1, 1]}})}]
     assert unknown_instruments(rows, [carry_bot()]) == {"carry": {"old_perp": -1.0}}

@@ -11,6 +11,10 @@
   verify: デプロイ後、新しい版の cron が実際に完了したことを /healthz で確かめる。
           時間内に確認できなければ失敗 (ワークフローが直前の版にロールバックする)
       python scripts/deploy_guard.py verify --url https://trade-bot-live.example.workers.dev --build <sha>
+
+  count: その mode に出る bot の本数を数える (本数だけを標準出力に出す)。
+         0 本なら deploy.yml がその段を飛ばす — 中身が空の Worker を置かないため
+      python scripts/deploy_guard.py count --mode live
 """
 
 from __future__ import annotations
@@ -67,6 +71,12 @@ def preflight(mode: str, rows: list[dict], allow: set[str]) -> int:
     return 1 if mode == "live" else 0  # paper は警告だけ
 
 
+def count(mode: str) -> int:
+    """その mode に出る bot の本数だけを出力する (deploy.yml が 0 本の段を飛ばすのに使う)"""
+    print(len(bots_for_mode(load_all(), mode)))
+    return 0
+
+
 def fetch_health(url: str) -> tuple[int, dict]:
     req = urllib.request.Request(url.rstrip("/") + "/healthz", headers={"user-agent": "trade-bot-factory-deploy"})
     try:
@@ -111,11 +121,15 @@ def main() -> None:
     v.add_argument("--build", required=True)
     v.add_argument("--timeout", type=float, default=300)
     v.add_argument("--interval", type=float, default=15)
+    c = sub.add_parser("count")
+    c.add_argument("--mode", required=True, choices=["paper", "live"])
     a = ap.parse_args()
     if a.cmd == "preflight":
         rows = d1_rows(Path(a.rows).read_text())
         allow = {x.strip() for x in a.allow.split(",") if x.strip()}
         sys.exit(preflight(a.mode, rows, allow))
+    if a.cmd == "count":
+        sys.exit(count(a.mode))
     sys.exit(verify(a.url, a.build, a.timeout, a.interval))
 
 
