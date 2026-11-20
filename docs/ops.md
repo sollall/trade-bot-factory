@@ -2,6 +2,8 @@
 
 bot を作って PR を main にマージすると、GitHub Actions が **paper → live** の順に Worker を入れ替えます。
 入れ替えの間も cron は止まらず、新しい版が動かなければ自動で直前の版に戻します。
+文書 (`*.md`)・`.claude/`・`docs/`・`deploy/` だけの変更ではデプロイは動きません (Worker に入らないため。
+動かしたいときは Actions から Deploy を手動で実行します)。
 
 ```
  PR マージ (main)

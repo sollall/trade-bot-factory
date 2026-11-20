@@ -10,6 +10,7 @@
 ## 守ること
 
 - **main へのマージ = paper → live のデプロイ。** main に直接 push しない。PR を作るのは頼まれたときだけ。
+  デプロイが動かないのは、文書・`.claude/`・`docs/`・`deploy/` だけの変更のとき (`deploy.yml` の `paths-ignore`)。
 - **本番の操作は人間がやる。** `wrangler deploy` (dry-run 以外) / `rollback` / `secret`、D1 のリモート操作、
   `npm run deploy:*` / `db:migrate:*`、bot の停止・再開 (`/api/bots/<id>/halt`・`/resume`) は実行しない。
   必要だと思ったら、理由とコマンドを添えて伝える。
