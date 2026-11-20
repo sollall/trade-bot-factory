@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Optional, Sequence
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from tbf.core.bot import Bot
 from tbf.core.metrics import compute_metrics
@@ -16,7 +16,7 @@ from tbf.market import VenueMarket, default_markets
 from tbf.market.coinbase import EXCHANGE_URL
 from tbf.market.hyperliquid import INFO_URL
 from tbf.worker.brokers import BinanceBroker, Broker, PaperBroker, RoutingBroker, UnsupportedBroker
-from tbf.worker.dashboard import BotSummary, render_dashboard
+from tbf.worker.dashboard import RANGES, BotSummary, render_bot_page, render_dashboard
 from tbf.worker.db import DB
 from tbf.worker.notify import Notifier
 from tbf.worker.ops import EXECUTION_WINDOW_MS, execution_summary, health, render_metrics, unmanaged_positions
@@ -185,10 +185,37 @@ class App:
         if not self._authorized({k.lower(): v for k, v in headers.items()}, query):
             return HttpResponse(401, "unauthorized", "text/plain")
         parts = [p for p in u.path.split("/") if p]
+        label = self.settings.instance or self.settings.mode
+        # `?token=` で開いたときは、ページ内のリンクにも同じトークンを引き継ぐ
+        link_qs = f"?token={quote(query['token'][0], safe='')}" if query.get("token") else ""
 
         if method == "GET" and not parts:
             items = [await self._summary(b, now) for b in self.bots]
-            return HttpResponse(200, render_dashboard(self.settings.instance or self.settings.mode, items), "text/html; charset=utf-8")
+            page = render_dashboard(
+                label, items, health(await self.store.heartbeat(), now, len(self.bots), self.build),
+                await self.store.events(None, 20), link_qs,
+            )
+            return HttpResponse(200, page, "text/html; charset=utf-8")
+        if method == "GET" and len(parts) == 2 and parts[0] == "bots":
+            bot = next((b for b in self.bots if b.id == parts[1]), None)
+            if not bot:
+                return HttpResponse(404, "bot not found", "text/plain")
+            range_key = (query.get("range") or ["30d"])[0]
+            if range_key not in RANGES:
+                range_key = "30d"
+            row = await self.store.get(bot.id)
+            curve = await self.store.equity(bot.id)
+            since = now - RANGES[range_key] * 86_400_000 if RANGES[range_key] else 0
+            s = BotSummary(
+                bot=bot,
+                row=row,
+                equity=row.equity(bot) if row else bot.capital,
+                metrics=compute_metrics(curve, await self.store.fills(bot.id)),
+                curve=[p for p in curve if p.time >= since],
+            )
+            fills = list(reversed(await self.store.fill_rows(bot.id, 30)))
+            page = render_bot_page(label, s, fills, await self.store.events(bot.id, 30), range_key, link_qs)
+            return HttpResponse(200, page, "text/html; charset=utf-8")
         if method == "GET" and parts == ["metrics"]:
             text = render_metrics(
                 self.settings.mode, self.build, now, self.bots, await self.store.rows(),
