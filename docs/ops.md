@@ -20,55 +20,6 @@ bot を作って PR を main にマージすると、GitHub Actions が **paper 
  6 rollback   5 が失敗したら wrangler rollback で直前の版へ
 ```
 
-## お試し → 採用の流れ (PR ごとの paper Worker)
-
-試したい bot は PR にして **ラベル `paper-trial`** を付けます。開いている `paper-trial` の PR が「お試し中のプール」です。
-
-```
- bot を書いてバックテスト → PR を作り、ラベル paper-trial を付ける
-   │  preview.yml
-   ▼
- trade-bot-pr-<番号> (Worker) + trade-bot-pr-<番号>-<sha> (D1) を作成 ── paper / live とは別の Worker・D1
-   PR で追加・変更した bot だけを paper で動かす (deploy の指定に関係なく。bot の変更がなければ全 bot)
-   │
-   ├ PR に push → D1 を作り直してデプロイ (成績はリセット)
-   ├ 毎日 00:17 UTC → PR のコメントに成績 (資産・リターン・最大 DD・シャープ・取引数・勝率) を更新
-   │
-   ├ いけてる → deploy=["paper", "live"] などにしてマージ → main の paper / live にデプロイ (下の流れ)
-   └ だめ     → PR を閉じる (またはラベルを外す)
-              → 最終成績をコメントに残し、Worker と D1 を削除
-```
-
-- お試し Worker は `MODE=paper` 固定で、取引所の API キーを持ちません (`PREVIEW` と `live` の組み合わせは起動時に拒否)
-- 通知は `[pr-12]` のように PR 番号付き。約定の通知はせず、停止・エラー・日次レポートだけ (`PREVIEW_WEBHOOK_URL` を設定した場合)
-- ダッシュボード: `https://trade-bot-pr-<番号>.<sub>.workers.dev/?token=<PREVIEW_ADMIN_TOKEN>`
-- マージ後の main の paper / live は新しい口座で始まります (お試しの成績や持ち高は引き継がない)
-- 同時に開けるお試し PR の数は Cloudflare の cron trigger 数の上限 (1 Worker 2 つ) と CPU 時間の課金で決まります。
-  Workers Paid なら数本〜十数本は問題ない想定です
-
-### 初回の設定
-
-GitHub の Settings で:
-
-| 種類 | 名前 | |
-|---|---|---|
-| Environment | `preview` | 作るだけ (必要なら Secrets をここに置く) |
-| Secret | `PREVIEW_ADMIN_TOKEN` | お試し Worker のダッシュボード / API の認証 (paper / live とは別の値に) |
-| Secret | `PREVIEW_WEBHOOK_URL` | (任意) お試し用の通知先。本番の通知チャンネルと分けると見やすい |
-| Label | `paper-trial` | Issues → Labels で作成 |
-
-`CLOUDFLARE_API_TOKEN` は main のデプロイと同じものを使います (D1 の作成・削除と Workers の編集・削除の権限)。
-
-### 分離について
-
-アカウントは 1 つのままで、**動くもの (Worker・D1・secret・通知先) は PR ごと・paper・live で全部別** です。
-お試しのコードが paper / live の口座データに触れることはありません。
-
-残る共有は Cloudflare の API トークンだけです (トークンは Worker 単位に権限を絞れないため、
-PR のワークフローからも技術的には live の Worker を書き換えられる)。自分だけのリポジトリなら実害は小さいですが、
-live に大きな資金を入れる段階になったら、live だけ別アカウントにすることを検討してください。
-それまでの事故防止として、`live` Environment の Deployment branches を `main` だけに制限しておきます。
-
 ## なぜ途切れないか
 
 | 心配 | 対策 |
@@ -166,7 +117,7 @@ Workers は毎分の cron で動くので、VM で常駐させるより発注が
 - 1 回ごとの値は上下にばらつくので、**30 日の平均** を見ます。0 付近なら遅れは効いていません。
   手数料 1 回分 (Binance 現物 10bps) に近い・超えるなら、短い足の戦略や VM での常駐を検討する目安です
   (Prometheus のアラート `ExecutionGapHigh`)
-- 見る場所: `/api/bots` の `execution`、日次レポート、お試し PR のコメント、Grafana の「足の確定から発注まで」「約定価格 対 バックテストの想定」
+- 見る場所: `/api/bots` の `execution`、日次レポート、Grafana の「足の確定から発注まで」「約定価格 対 バックテストの想定」
 
 ## OSS の監視基盤 (`deploy/monitoring/`)
 

@@ -145,10 +145,8 @@ JPY 建てで `tbf/market/` に取り込みがないこと、Binance は Cloudfl
 ### 推奨フロー
 
 1. `python -m tbf.backtest --bot my_bot` で検証
-2. PR を作ってラベル `paper-trial` を付ける → その PR 専用の paper Worker で実データ検証が始まる
-   (push するたびにリセット。成績は毎日 PR にコメントされる)
-3. 良ければ `deploy=["paper", "live"]` (または `["paper"]` で main の paper で継続観察) にしてマージ → 本番稼働
-   (GitHub Environment の承認を挟める)。だめなら PR を閉じればお試し Worker も消える
+2. `deploy=["paper"]` で PR を作ってマージ → main の paper Worker で実データ検証
+3. 良ければ `deploy=["paper", "live"]` にする PR をマージ → 本番稼働 (GitHub Environment の承認を挟める)
 
 詳しくは [docs/ops.md](docs/ops.md)。
 
@@ -221,7 +219,7 @@ npx wrangler secret put BINANCE_API_SECRET --env live
 GitHub リポジトリの Settings で:
 
 - Secrets: `CLOUDFLARE_API_TOKEN` (Workers と D1 の編集権限), `CLOUDFLARE_ACCOUNT_ID`
-- Environments: `paper` と `live` を作成。`live` に Required reviewers を付けると本番デプロイ前に承認が必要になる
+- Environments: `paper` と `live` を作成。`live` に Required reviewers を付けると本番デプロイ前に承認が必要になる。`live` の Deployment branches は `main` だけに制限しておく
 - 各 Environment の Variables に `WORKER_URL` (Worker の URL)。デプロイ後の動作確認と自動ロールバックに使う
 
 `wrangler.toml` をコミットして main に push すると `.github/workflows/deploy.yml` が
