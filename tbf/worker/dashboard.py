@@ -125,7 +125,20 @@ def _health_line(health: Optional[Mapping[str, Any]]) -> str:
     errors = int(health.get("last_tick_errors") or 0)
     mark = '<span class="st running">● cron 正常</span>' if ok else '<span class="st halted">■ cron が止まっています</span>'
     err = f' ・ <span class="neg">直近の実行でエラー {errors} 件</span>' if errors else ""
-    return f'{mark} <span class="sub">最後の完了 {float(health["age_sec"]):.0f} 秒前 ・ build {_esc(health.get("build", ""))}</span>{err}'
+    took = f' ・ 所要 {float(health["duration_sec"]):.1f} 秒' if "duration_sec" in health else ""
+    lag = f' ・ 起動の遅れ {float(health.get("last_tick_lag_sec") or 0):.1f} 秒'
+    stale = ""
+    if health.get("last_tick_build") and health.get("last_tick_build") != health.get("build"):
+        stale = ' ・ <span class="neg">cron はまだ前の版で動いています</span>'
+    return (
+        f'{mark} <span class="sub">最後の完了 {float(health["age_sec"]):.0f} 秒前{took}{lag} ・ '
+        f'build {_esc(str(health.get("build", ""))[:12])}</span>{err}{stale}'
+    )
+
+
+def _count(n: int) -> str:
+    """0 なら普通の字、1 以上なら赤で目立たせる"""
+    return f'<span class="neg">{n}</span>' if n else "0"
 
 
 def _tile(label: str, value: str, sub: str = "") -> str:
@@ -150,16 +163,16 @@ td.msg{white-space:normal;min-width:240px}
 .sub{font-size:.75rem;color:var(--fg2)}.pos{color:var(--pos)}.neg{color:var(--neg)}
 .st{font-weight:600}.st.running{color:var(--pos)}.st.halted{color:var(--neg)}.st.pending{color:var(--fg2)}
 .lv.error{color:var(--neg);font-weight:600}.lv.warn{color:var(--warn);font-weight:600}
-.spark{color:var(--acc)}
+.spark{color:var(--acc)}.alert{border:1px solid var(--neg);border-radius:8px;padding:8px 12px;margin:12px 0}
 .tabs{display:flex;gap:4px;margin-bottom:8px}.tabs a{padding:3px 10px;border-radius:6px;font-size:.8rem;text-decoration:none;color:var(--fg2);border:1px solid var(--line)}
 .tabs a.on{background:var(--card);color:var(--fg);font-weight:600}
-.chart{position:relative;height:240px;margin:0 0 36px 0;padding-right:64px}
-.plot{position:relative;height:100%;touch-action:pan-y}.plot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.chart{position:relative;height:240px;margin:0 0 36px 0;padding-right:64px}.chart.short{height:140px}
+.plot{position:relative;height:100%;touch-action:pan-y;--c:var(--acc)}.plot.dd{--c:var(--neg)}.plot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .grid{position:absolute;left:0;right:0;border-top:1px solid var(--line)}
 .ylab{position:absolute;left:100%;transform:translateY(-50%);padding-left:6px;font-size:.7rem;color:var(--fg2);font-variant-numeric:tabular-nums}
 .xlab{position:absolute;top:100%;padding-top:4px;font-size:.7rem;color:var(--fg2)}
 .cross{position:absolute;top:0;bottom:0;width:1px;background:var(--fg2);display:none;pointer-events:none}
-.dot{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--acc);border:2px solid var(--bg);display:none;pointer-events:none}
+.dot{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--c);border:2px solid var(--bg);display:none;pointer-events:none}
 .tip{position:absolute;top:4px;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:.75rem;display:none;pointer-events:none;white-space:nowrap;font-variant-numeric:tabular-nums}
 details{margin-top:8px}pre{background:var(--card);padding:10px;border-radius:8px;overflow-x:auto;font-size:.8rem}
 """
@@ -178,7 +191,7 @@ document.querySelectorAll('.plot[data-pts]').forEach(p=>{
     let b=d[0];for(const q of d)if(Math.abs(q[0]-t)<Math.abs(b[0]-t))b=q;
     const x=(b[0]-t0)/((t1-t0)||1)*100,y=(1-(b[1]-lo)/((hi-lo)||1))*100;
     c.style.left=o.style.left=x+'%';o.style.top=y+'%';c.style.display=o.style.display=tip.style.display='block';
-    tip.textContent=f.format(new Date(b[0]))+'  '+b[1].toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+' USD';
+    tip.textContent=f.format(new Date(b[0]))+'  '+b[1].toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+(p.dataset.unit||'');
     if(x>60){tip.style.left='auto';tip.style.right=(100-x)+'%';tip.style.marginRight='8px'}else{tip.style.right='auto';tip.style.left=x+'%';tip.style.marginLeft='8px'}
   });
 });
@@ -207,8 +220,14 @@ def render_dashboard(
     health: Optional[Mapping[str, Any]] = None,
     events: Sequence[Mapping[str, Any]] = (),
     qs: str = "",
+    errors_1h: Optional[Mapping[str, int]] = None,
+    unmanaged: Optional[Mapping[str, Mapping[str, float]]] = None,
+    execution: Optional[Mapping[str, Mapping[str, float]]] = None,
 ) -> str:
-    """一覧。qs は `?token=...` で入ってきたときにリンクへ引き継ぐクエリ"""
+    """一覧。qs は `?token=...` で入ってきたときにリンクへ引き継ぐクエリ。
+    errors_1h: bot ごとの直近 1 時間のエラー件数 / unmanaged: デプロイから外れたのに残っている持ち高 /
+    execution: 約定の質 (ops.execution_summary)"""
+    errors_1h, unmanaged, execution = errors_1h or {}, unmanaged or {}, execution or {}
     rows = []
     for s in items:
         ret = s.equity / s.bot.capital - 1
@@ -224,11 +243,13 @@ def render_dashboard(
 <td class="num">{_pct(m.current_drawdown)}<div class="sub">最大 {_pct(m.max_drawdown)}</div></td>
 <td class="num">{m.trades}</td>
 <td class="num">{_pct(m.win_rate)}</td>
+<td class="num">{s.row.consecutive_losses if s.row else 0}</td>
+<td class="num">{_count(errors_1h.get(s.bot.id, 0))}</td>
 <td class="num">{m.sharpe:.2f}</td>
 <td class="spark">{_sparkline(s.curve)}</td>
 </tr>"""
         )
-    table = "".join(rows) or '<tr><td colspan="10">この環境にデプロイされた bot はありません</td></tr>'
+    table = "".join(rows) or '<tr><td colspan="12">この環境にデプロイされた bot はありません</td></tr>'
     capital = sum(s.bot.capital for s in items)
     total = sum(s.equity for s in items)
     running = sum(1 for s in items if s.row and s.row.status == "running")
@@ -239,26 +260,62 @@ def render_dashboard(
             _tile("合計資産 (USD)", _money(total), f"元手 {_money(capital)}"),
             _tile("合計損益", _signed_money(total - capital), _signed_pct(total / capital - 1) if capital > 0 else ""),
             _tile("bot", f"{running} <span class=\"sub\">/ {len(items)} 稼働中</span>", halted_text),
+            _tile("直近 1 時間のエラー", _count(sum(errors_1h.values())), "bot ごとの件数は下の表"),
+            _tile("管理外の持ち高", _count(len(unmanaged)), "デプロイから外れた bot に残っている持ち高"),
         ]
     )
+    alert = ""
+    if unmanaged:
+        items_text = "; ".join(f"{_esc(b)}: " + ", ".join(f"{_esc(a)} {_num(q)}" for a, q in pos.items()) for b, pos in unmanaged.items())
+        alert = f'<div class="alert"><span class="neg">■ デプロイされていない bot に持ち高が残っています (手動で処理が必要)</span><div class="sub">{items_text}</div></div>'
     body = f"""<h1>trade-bot-factory {_mode_badge(mode)}</h1>
 <div>{_health_line(health)}</div>
 <div class="tiles">{tiles}</div>
-<div class="wrap"><table><thead><tr><th>bot</th><th>状態</th><th class="num">資産</th><th class="num">累計</th><th class="num">今日 (UTC)</th><th class="num">DD</th><th class="num">決済</th><th class="num">勝率</th><th class="num">シャープ</th><th>30日</th></tr></thead>
+{alert}
+<div class="wrap"><table><thead><tr><th>bot</th><th>状態</th><th class="num">資産</th><th class="num">累計</th><th class="num">今日 (UTC)</th><th class="num">DD</th><th class="num">決済</th><th class="num">勝率</th><th class="num">連敗</th><th class="num">エラー (1h)</th><th class="num">シャープ</th><th>30日</th></tr></thead>
 <tbody>{table}</tbody></table></div>
+<h2>約定の質 (30日)</h2>
+{_execution_table(execution, [s.bot.id for s in items], qs, True)}
 <h2>直近のイベント</h2>
 {_events_table(events, True, qs)}"""
     return _page("trade-bot-factory", mode, body)
 
 
-def _chart(points: Sequence[EquityPoint]) -> str:
-    points = downsample(points)
+def drawdown_curve(curve: Sequence[EquityPoint], since: int = 0) -> list[EquityPoint]:
+    """ピークからの下げ (%, 0 以下)。ピークは全期間で数え、since より前は表示から外す"""
+    out, peak = [], 0.0
+    for p in curve:
+        peak = max(peak, p.equity)
+        if p.time >= since:
+            out.append(EquityPoint(p.time, -(1 - p.equity / peak) * 100 if peak > 0 else 0.0))
+    return out
+
+
+def downsample_min(points: Sequence[EquityPoint], limit: int = MAX_CHART_POINTS) -> list[EquityPoint]:
+    """区間ごとの最小値で間引く (等間隔に拾うと、いちばん深い下げを落とすことがある)"""
+    if len(points) <= limit:
+        return list(points)
+    size = len(points) / limit
+    out = [min(points[int(i * size) : max(int((i + 1) * size), int(i * size) + 1)], key=lambda p: p.equity) for i in range(limit)]
+    if out[-1] is not points[-1]:
+        out.append(points[-1])  # 今の値は必ず残す
+    return out
+
+
+def _chart(points: Sequence[EquityPoint], label: str = "資産推移 (USD)", unit: str = " USD", kind: str = "equity") -> str:
+    """kind="equity": 資産 (上下に余白) / kind="drawdown": ピークからの下げ (上端が 0%)"""
+    dd = kind == "drawdown"
+    points = downsample_min(points) if dd else downsample(points)
     if len(points) < 2:
-        return '<p class="sub">この期間の資産推移はまだありません</p>'
+        return '<p class="sub">この期間の記録はまだありません</p>'
     vals = [p.equity for p in points]
     lo, hi = min(vals), max(vals)
-    pad = (hi - lo) * 0.08 or max(abs(hi) * 0.001, 0.01)
-    lo, hi = lo - pad, hi + pad
+    if dd:
+        lo, hi = min(lo * 1.1, -0.5), 0.0
+    else:
+        pad = (hi - lo) * 0.08 or max(abs(hi) * 0.001, 0.01)
+        lo, hi = lo - pad, hi + pad
+    fmt = (lambda v: f"{v:.1f}%") if dd else _money
     t0, t1 = points[0].time, points[-1].time
     span = (t1 - t0) or 1
     d = "".join(
@@ -267,16 +324,42 @@ def _chart(points: Sequence[EquityPoint]) -> str:
     )
     grid = "".join(
         f'<div class="grid" style="top:{(1 - k / 3) * 100:.1f}%"></div>'
-        f'<div class="ylab" style="top:{(1 - k / 3) * 100:.1f}%">{_money(lo + (hi - lo) * k / 3)}</div>'
+        f'<div class="ylab" style="top:{(1 - k / 3) * 100:.1f}%">{fmt(lo + (hi - lo) * k / 3)}</div>'
         for k in range(4)
     )
     pts = json.dumps([[p.time, round(p.equity, 4)] for p in points], separators=(",", ":"))
-    return f"""<div class="chart"><div class="plot" data-lo="{lo}" data-hi="{hi}" data-pts="{_esc(pts)}" role="img" aria-label="資産推移 (USD)">
+    cls = "plot dd" if dd else "plot"
+    return f"""<div class="chart{' short' if dd else ''}"><div class="{cls}" data-lo="{lo}" data-hi="{hi}" data-unit="{_esc(unit)}" data-pts="{_esc(pts)}" role="img" aria-label="{_esc(label)}">
 {grid}
-<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="{d}" fill="none" stroke="var(--acc)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>
+<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="{d}" fill="none" stroke="var(--c)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>
 <div class="xlab" style="left:0">{_time(t0)}</div><div class="xlab" style="right:0">{_time(t1)}</div>
 <div class="cross"></div><div class="dot"></div><div class="tip"></div>
 </div></div>"""
+
+
+def _execution_table(execution: Mapping[str, Mapping[str, float]], bot_ids: Sequence[str], qs: str, link: bool) -> str:
+    """約定の質 (30 日)。足の確定から発注までの遅れと、バックテストの想定価格との差"""
+    rows = []
+    for b in bot_ids:
+        ex = execution.get(b)
+        if not ex:
+            continue
+        name = f'<td><a href="bots/{_esc(b)}{qs}">{_esc(b)}</a></td>' if link else ""
+        gap = float(ex["gap_bps"])
+        rows.append(
+            f'<tr>{name}<td class="num">{int(ex["fills"])}</td><td class="num">{float(ex["delay_avg_sec"]):.1f}</td>'
+            f'<td class="num">{float(ex["delay_p95_sec"]):.1f}</td><td class="num">{float(ex["delay_max_sec"]):.1f}</td>'
+            f'<td class="num"><span class="{"neg" if gap > 0 else "pos"}">{gap:+.2f}</span></td>'
+            f'<td class="num">{float(ex["gap_usd"]):+,.2f}</td><td class="num">{_money(float(ex["notional_usd"]))}</td></tr>'
+        )
+    if not rows:
+        return '<p class="sub">この 30 日に、遅れと価格差を記録した約定はありません</p>'
+    head = ("<th>bot</th>" if link else "") + (
+        '<th class="num">約定</th><th class="num">遅れ 平均 (秒)</th><th class="num">95% (秒)</th><th class="num">最大 (秒)</th>'
+        '<th class="num">想定との差 (bps)</th><th class="num">差額 (USD)</th><th class="num">約定代金 (USD)</th>'
+    )
+    return f"""<div class="wrap"><table><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>
+<p class="sub">遅れ = 足の確定から発注まで。想定との差 = バックテストが仮定した約定価格との差 (+ は不利)</p>"""
 
 
 def _holdings_table(bot: Bot, row: Optional[BotRow]) -> str:
@@ -333,6 +416,9 @@ def render_bot_page(
     events: Sequence[Mapping[str, Any]],
     range_key: str = "30d",
     qs: str = "",
+    drawdown: Sequence[EquityPoint] = (),
+    execution: Optional[Mapping[str, float]] = None,
+    errors_1h: int = 0,
 ) -> str:
     """bot ごとの詳細。s.curve は range_key の期間に絞った資産推移、fills は新しい順"""
     bot, row, m = s.bot, s.row, s.metrics
@@ -368,11 +454,15 @@ def render_bot_page(
 <h2>資産推移 (USD)</h2>
 <div class="tabs">{tabs}</div>
 {_chart(s.curve)}
+<h2>ピークからの下げ (%)</h2>
+{_chart(drawdown, "ピークからの下げ (%)", "%", "drawdown")}
 <h2>持ち高</h2>
 {_holdings_table(bot, row)}
 <h2>直近の約定</h2>
 {_fills_table(fills)}
-<h2>イベント</h2>
+<h2>約定の質 (30日)</h2>
+{_execution_table({bot.id: execution} if execution else {}, [bot.id], qs, False)}
+<h2>イベント <span class="sub">直近 1 時間のエラー {_count(errors_1h)} 件</span></h2>
 {_events_table(events, False, qs)}
 <details><summary class="sub">設定 (パラメータ・リスク上限)</summary><pre>{_esc(config)}</pre></details>
 <p class="sub"><a href="../api/bots/{_esc(bot.id)}{qs}">JSON で見る</a></p>"""

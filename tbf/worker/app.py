@@ -16,7 +16,7 @@ from tbf.market import VenueMarket, default_markets
 from tbf.market.coinbase import EXCHANGE_URL
 from tbf.market.hyperliquid import INFO_URL
 from tbf.worker.brokers import BinanceBroker, Broker, PaperBroker, RoutingBroker, UnsupportedBroker
-from tbf.worker.dashboard import RANGES, BotSummary, render_bot_page, render_dashboard
+from tbf.worker.dashboard import RANGES, BotSummary, drawdown_curve, render_bot_page, render_dashboard
 from tbf.worker.db import DB
 from tbf.worker.notify import Notifier
 from tbf.worker.ops import EXECUTION_WINDOW_MS, execution_summary, health, render_metrics, unmanaged_positions
@@ -186,9 +186,15 @@ class App:
 
         if method == "GET" and not parts:
             items = [await self._summary(b, now) for b in self.bots]
+            hb = await self.store.heartbeat()
+            h = health(hb, now, len(self.bots), self.build)
+            if hb:
+                h["duration_sec"] = int(hb.get("duration_ms") or 0) / 1000
             page = render_dashboard(
-                label, items, health(await self.store.heartbeat(), now, len(self.bots), self.build),
-                await self.store.events(None, 20), link_qs,
+                label, items, h, await self.store.events(None, 20), link_qs,
+                errors_1h=await self.store.error_counts(now - 3_600_000),
+                unmanaged=unmanaged_positions([asdict(r) for r in await self.store.rows()], [b.id for b in self.bots]),
+                execution=execution_summary(await self.store.execution_rows(now - EXECUTION_WINDOW_MS)),
             )
             return HttpResponse(200, page, "text/html; charset=utf-8")
         if method == "GET" and len(parts) == 2 and parts[0] == "bots":
@@ -209,7 +215,12 @@ class App:
                 curve=[p for p in curve if p.time >= since],
             )
             fills = list(reversed(await self.store.fill_rows(bot.id, 30)))
-            page = render_bot_page(label, s, fills, await self.store.events(bot.id, 30), range_key, link_qs)
+            page = render_bot_page(
+                label, s, fills, await self.store.events(bot.id, 30), range_key, link_qs,
+                drawdown=drawdown_curve(curve, since),
+                execution=execution_summary(await self.store.execution_rows(now - EXECUTION_WINDOW_MS, bot.id)).get(bot.id),
+                errors_1h=(await self.store.error_counts(now - 3_600_000)).get(bot.id, 0),
+            )
             return HttpResponse(200, page, "text/html; charset=utf-8")
         if method == "GET" and parts == ["metrics"]:
             text = render_metrics(

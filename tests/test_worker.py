@@ -220,6 +220,42 @@ async def test_dashboard_pages():
     assert bearer.status == 200 and 'href="carry?range=30d"' in bearer.body and "token=" not in bearer.body
 
 
+async def test_dashboard_ops_panels():
+    """Grafana で見ていた項目: エラー件数・管理外の持ち高・cron の所要時間・約定の質・ドローダウン"""
+    db = make_db()
+    app = make_app([carry_bot()], db, {"binance": FakeMarket(3000), "hyperliquid": FakeMarket(3000)})
+    await app.scheduled("* * * * *", NOW)
+    await db.execute("INSERT INTO events (bot_id, time, level, message) VALUES ('carry', ?, 'error', 'boom')", (NOW,))
+    await db.execute(
+        "INSERT INTO bot_state (bot_id, cash, peak_equity, day_start_equity, updated_at, portfolio) VALUES ('gone', 0, 1, 1, 0, ?)",
+        (json.dumps({"cash": {}, "positions": {"x<y": [1.5, 10]}}),),
+    )
+    for i, v in enumerate([10_000, 11_000, 9_900, 10_500]):
+        await db.execute("INSERT OR REPLACE INTO equity (bot_id, time, equity) VALUES ('carry', ?, ?)", (NOW - (4 - i) * 3_600_000, v))
+
+    top = (await app.handle("GET", "https://w/", {}, now=NOW + 1000)).body
+    assert "所要" in top and "起動の遅れ" in top
+    assert "デプロイされていない bot に持ち高が残っています" in top and "gone: x&lt;y 1.5" in top
+    assert "約定の質" in top and "想定との差 (bps)" in top
+    assert '<td class="num"><span class="neg">1</span></td>' in top  # carry の直近 1 時間のエラー
+
+    page = (await app.handle("GET", "https://w/bots/carry", {}, now=NOW + 1000)).body
+    assert "ピークからの下げ" in page and 'class="plot dd"' in page and page.count("data-pts=") == 2
+    assert "直近 1 時間のエラー" in page and "約定の質" in page
+
+
+def test_drawdown_curve_and_min_downsample():
+    from tbf.core.types import EquityPoint
+    from tbf.worker.dashboard import downsample_min, drawdown_curve
+
+    curve = [EquityPoint(t, v) for t, v in enumerate([100.0, 200.0, 150.0, 180.0])]
+    dd = drawdown_curve(curve, since=2)  # ピーク (200) は表示範囲の外でも数える
+    assert [p.time for p in dd] == [2, 3] and dd[0].equity == pytest.approx(-25) and dd[1].equity == pytest.approx(-10)
+    pts = [EquityPoint(i, -50.0 if i == 4321 else 0.0) for i in range(10_000)]
+    out = downsample_min(pts, 400)
+    assert min(p.equity for p in out) == -50.0 and out[-1] is pts[-1] and len(out) <= 401
+
+
 def test_downsample_keeps_ends():
     from tbf.core.types import EquityPoint
     from tbf.worker.dashboard import downsample
