@@ -148,9 +148,35 @@ ssh -L 3000:localhost:3000 -L 3001:localhost:3001 -L 9090:localhost:9090 <server
   (paper と live)。通知先に Discord / Slack / Telegram などを設定
 - Prometheus http://localhost:9090/alerts: `prometheus/alerts.yml` のアラート (cron 停止・bot 停止・エラー多発・戦略の遅れ・管理外の持ち高)
 
+### Grafana をブラウザから直接見る (Cloudflare Tunnel + Access)
+
+SSH トンネルなしで `https://grafana.<自分のドメイン>` から開けるようにします。サーバーのポートは開けません
+(`cloudflared` がサーバーから Cloudflare へ外向きに接続するだけ)。**Cloudflare に載せたドメインが 1 つ必要です。**
+
+1. **トンネルを作る**: Cloudflare の Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared。
+   表示されるトークン (`eyJ...`) を控える
+2. **公開先を決める**: 同じトンネルの Public Hostname に追加。
+   Subdomain `grafana` / Domain 自分のドメイン / Service `HTTP` `grafana:3000`
+   (`cloudflared` は compose の中で動くので、`localhost` ではなくサービス名で指す)
+3. **見られる人を絞る (必ず 4 より先に)**: Zero Trust → Access → Applications → Add an application → Self-hosted。
+   Application domain に `grafana.<自分のドメイン>`、Policy は Allow で自分のメールだけ。
+   これを飛ばすと、Grafana のログイン画面がインターネットにそのまま出ます
+4. **サーバーで起動**:
+
+   ```bash
+   cd /opt/trade-bot-factory/deploy/monitoring
+   echo 'TUNNEL_TOKEN=<1 のトークン>' > secrets/cloudflared.env && chmod 600 secrets/cloudflared.env
+   echo 'GRAFANA_ROOT_URL=https://grafana.<自分のドメイン>/' >> .env
+   docker compose --profile tunnel up -d
+   ```
+
+5. `https://grafana.<自分のドメイン>` を開く → Cloudflare のメール認証 → Grafana のログイン (admin / `secrets/grafana_admin_password`)
+
+止めるときは `docker compose --profile tunnel stop cloudflared`。Uptime Kuma と Prometheus は公開していません
+(足すなら 2 と 3 を同じ要領で。Prometheus は認証が無いので Access が必須)。
+
 ### この先の拡張
 
 - **Alertmanager**: `alerts.yml` のアラートを Discord / Slack に飛ばす (今は Uptime Kuma と Worker 自身の Webhook 通知で代替)
 - **ログ**: Workers Logpush や `wrangler tail` を Loki に送ると、Grafana でエラーのスタックトレースまで追える
 - **アビトラのサーバー**: `tbf.arb` に `/metrics` を足せば同じ Prometheus / Grafana に載る
-- **公開**: チームで見るなら Grafana を Cloudflare Tunnel + Access の後ろに置く (ポートを開けない)
