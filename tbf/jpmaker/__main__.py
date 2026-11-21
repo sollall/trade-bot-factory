@@ -45,12 +45,31 @@ def hedge_delay_ms(store: JpMakerStore, since: int, until: int) -> float:
     return declared.FILL_DETECTION_FLOOR_MS + rtt
 
 
+def period_since(period: str, first: int, until: int, days: float) -> int:
+    """集計期間の先頭。
+
+    `record` = 記録の先頭から全部 (既定)。`trailing` = 集計時刻から遡って `days` 日。
+
+    既定を `record` にしてあるのは、`trailing` が **記録が目標日数に達した瞬間から
+    記録の先頭を削り落とす**ためである。この計測では記録が 11-14 11:30:27Z 始まりで、
+    11-21 12:00:00Z より後に集計すると先頭の 1 日窓が 12 時間を割り、
+    `MIN_WINDOW_SPAN_RATIO` (50%) を 1 秒差で下回って**判定から外れる**。
+    その窓はこの計測で最も悪い窓なので、落とすと中央値が良い側に動く。
+    「期間の区切り方を変えると結論が反転する」失敗 (TRA-50 §7・§8) そのものなので、
+    判定は記録の先頭を固定した `record` で出し、`trailing` は感度として並べるだけにする。
+    """
+    if period == "trailing":
+        return max(first, until - int(days * DAY_MS))
+    return first
+
+
 async def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="python -m tbf.jpmaker")
     ap.add_argument("command", choices=["check", "run", "report"])
     ap.add_argument("--config", default="jp_maker.toml")
     ap.add_argument("--db", default="data/jp_maker.sqlite")
     ap.add_argument("--days", type=float, default=float(declared.RUN_DAYS))
+    ap.add_argument("--period", choices=["record", "trailing"], default="record")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
 
@@ -59,10 +78,9 @@ async def main(argv: list[str]) -> int:
 
     if a.command == "report":
         until = int(time.time() * 1000)
-        # 記録の先頭から出す (--days より記録が短ければ記録の先頭に合わせる)
         row = store.query("SELECT MIN(time) t FROM book")
         first = row[0]["t"] if row and row[0]["t"] is not None else until
-        since = max(first, until - int(a.days * DAY_MS))
+        since = period_since(a.period, first, until, a.days)
         data = load(store, declared.PAIRS, since, until)
         m = run_all(
             data,
@@ -72,7 +90,7 @@ async def main(argv: list[str]) -> int:
             hedge_delay_ms(store, since, until),
             hl_poll_sec=cfg.hl_poll_sec,
         )
-        text = build_report(store, m)
+        text = build_report(store, m, period=a.period)
         if a.out:
             open(a.out, "w").write(text + "\n")
             _log(f"wrote {a.out}")

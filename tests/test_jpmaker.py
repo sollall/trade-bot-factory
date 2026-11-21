@@ -18,6 +18,7 @@ import pytest
 
 from tbf.jpmaker import declared
 from tbf.jpmaker.collect import Collector
+from tbf.jpmaker.__main__ import period_since
 from tbf.jpmaker.config import load_config
 from tbf.jpmaker.hedge import HlSample, hedge_cost, slippage_ratio, walk_levels
 from tbf.jpmaker.measure import (
@@ -744,3 +745,55 @@ def test_prev_pick_from_an_excluded_window_is_marked(tmp_path):
 
     # 印の意味が本文に書かれていること (印だけ出して説明が無いと読めない)
     assert "†" in build_report(store, m)
+
+
+def test_report_period_does_not_slide_off_the_head_of_the_record(tmp_path):
+    """集計期間は記録の先頭に固定され、集計時刻で判定対象の窓が増減しないこと。
+
+    `--period trailing` (集計時刻から遡って 7 日) は、記録が目標日数に達した瞬間から
+    記録の先頭を削り落とす。この計測の実際の時刻では、11-21 12:00:00Z より後に
+    集計すると先頭の 1 日窓が 12 時間を 1 秒割り、`MIN_WINDOW_SPAN_RATIO` を
+    下回って判定から外れる。その窓はこの計測で最も悪い窓なので、落とすと中央値が
+    良い側に動く ——「期間の区切り方で結論が動く」失敗そのもの。
+    既定を `record` にして、集計を何時に走らせても同じ窓を判定すること。
+    """
+    import datetime
+
+    def ms(s: str) -> int:
+        return int(datetime.datetime.fromisoformat(s).replace(
+            tzinfo=datetime.timezone.utc).timestamp() * 1000)
+
+    rec_start = ms("2026-11-14T11:30:27")  # この計測の記録の先頭
+    first_boundary = ms("2026-11-15T00:00:00")  # 先頭の 1 日窓の終わり (UTC 0 時境界)
+
+    def head_span_ratio(until_iso: str, period: str) -> float:
+        since = period_since(period, rec_start, ms(until_iso), declared.RUN_DAYS)
+        return (first_boundary - since) / DAY_MS
+
+    # trailing は 1 秒の差で先頭窓を判定から落とす
+    assert head_span_ratio("2026-11-21T12:00:00", "trailing") >= declared.MIN_WINDOW_SPAN_RATIO
+    assert head_span_ratio("2026-11-21T12:00:01", "trailing") < declared.MIN_WINDOW_SPAN_RATIO
+    assert head_span_ratio("2026-11-21T12:20:00", "trailing") < declared.MIN_WINDOW_SPAN_RATIO
+
+    # record は集計時刻に依らず記録の先頭のまま = 先頭窓は判定に残る
+    for until_iso in ("2026-11-21T11:40:00", "2026-11-21T12:00:01", "2026-11-22T06:00:00"):
+        assert period_since("record", rec_start, ms(until_iso), declared.RUN_DAYS) == rec_start
+        assert head_span_ratio(until_iso, "record") >= declared.MIN_WINDOW_SPAN_RATIO
+
+    # 既定が record であること (trailing に暗黙で替わらないこと)
+    assert period_since("record", rec_start, ms("2026-11-21T12:20:00"), 7) == rec_start
+
+    # どちらで出した表なのかが本文から読めること (印だけ変えて黙って差し替えないため)
+    step = 30_000
+    span = int(1.2 * 86_400_000)
+    store = JpMakerStore(tmp_path / "db.sqlite")
+    for pair, coin in declared.PAIRS.items():
+        for i in range(span // step):
+            t = T0 + i * step
+            store.add_book(t, t, pair, 99.0, 0.0, 101.0, 0.0, None)
+            store.add_hl_book(t, t, coin, [["1.0", "100000"]], [["1.01", "100000"]])
+    store.commit()
+    m = run_all(load(store, declared.PAIRS, T0, T0 + span), T0, T0 + span, step / 1000, 1250.0)
+    assert "--period record" in build_report(store, m, period="record")
+    assert "--period trailing" in build_report(store, m, period="trailing")
+    assert "記録の先頭が削られる" in build_report(store, m, period="trailing")

@@ -583,12 +583,18 @@ def section_verdict(m: Measurement) -> str:
     return "\n".join(out)
 
 
-def build_report(store: JpMakerStore, m: Measurement) -> str:
+def build_report(store: JpMakerStore, m: Measurement, period: str = "record") -> str:
     span_days = (m.until - m.since) / DAY_MS
+    how = (
+        "記録の先頭から全部 (--period record)"
+        if period == "record"
+        else f"集計時刻から遡って {declared.RUN_DAYS} 日 (--period trailing。記録の先頭が削られる)"
+    )
     head = [
         "# TRA-65 国内の薄い板への両側指値 (マーケットメイク) シャドーモード計測",
         f"記録期間: {_ts(m.since)} -> {_ts(m.until)} UTC ({span_days:.2f} 日)  "
         f"宣言の凍結日 {declared.FROZEN_AT}  目標 {declared.RUN_DAYS} 日",
+        f"期間の取り方: {how}",
         f"対象: {', '.join(m.data)}  サイズ: {', '.join(f'{s / 10_000:.0f}万円' for s in declared.SIZES_JPY)}",
         "発注はしていない (読み取り専用の公開 API のみ。鍵・口座なし)。",
         "",
