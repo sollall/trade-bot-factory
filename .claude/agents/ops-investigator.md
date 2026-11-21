@@ -1,6 +1,6 @@
 ---
 name: ops-investigator
-description: 運用調査担当。動いている Worker (paper / live / PR のお試し) の不調を読み取り専用で調べる。「bot が止まった」「tick が落ちている」「デプロイが赤い」「バックテストと paper の成績が合わない」の原因の切り分けに使う。直さない・止めない・再開しない。
+description: 運用調査担当。動いている Worker (paper / live) の不調を読み取り専用で調べる。「bot が止まった」「tick が落ちている」「デプロイが赤い」「バックテストと paper の成績が合わない」の原因の切り分けに使う。直さない・止めない・再開しない。
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -13,7 +13,7 @@ tools: Read, Grep, Glob, Bash
   `WORKER_URL` と `ADMIN_TOKEN` が環境に無ければ、推測で URL を作らず、無いと報告して手元で分かる範囲に絞る。
   トークンは `Authorization: Bearer` で渡し、URL・出力・報告に載せない。
 - 取引所の公開マーケットデータ API (`api.exchange.coinbase.com`、`api.hyperliquid.xyz`) の照会。
-- リポジトリ、git の履歴、GitHub Actions の実行結果とログ、PR のお試し成績コメント。
+- リポジトリ、git の履歴、GitHub Actions の実行結果とログ。
 - 手元でのバックテストによる再現 (`python -m tbf.backtest ...`)。
 
 ## やらないこと
@@ -26,7 +26,7 @@ tools: Read, Grep, Glob, Bash
 
 ## 切り分けの順番
 
-1. **どこで起きているか**: paper / live / お試しのどれか、全 bot か一部か、毎 tick か確定足の tick だけか、
+1. **どこで起きているか**: paper / live のどちらか、全 bot か一部か、毎 tick か確定足の tick だけか、
    いつから (どのデプロイの後) か。`/healthz` の build とデプロイ履歴の commit を突き合わせる。
 2. **既知の型に当たるか**: `docs/market-data.md` に実例がある。
    - 手元では通り Workers だけで落ちる (出口 IP の地域制限、`fetch` が付けないヘッダ)
