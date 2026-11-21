@@ -1,33 +1,21 @@
-# TRA-33 one-shot PR workflow の結果
+## Deploy の列を開ける (2026-11-21T11:03:18Z)
 
-- 実行: https://github.com/sollall/trade-bot-factory/actions/runs/44517462540
-- PR 番号: ``
-- open: `failure` / comment: `skipped` / merge: `skipped`
+### 実行前
+- #8 pending/ 1810c2b 2026-11-21T05:05:13Z
+- #7 completed/cancelled ccdf5e9 2026-11-21T05:01:22Z
+- #6 completed/cancelled 3ba18cd 2026-11-20T20:52:37Z
+- #5 waiting/ 697d29d 2026-11-17T15:23:56Z
+- #4 completed/failure a17ef70 2026-11-13T13:16:28Z
+- #3 completed/failure b7bd4cb 2026-11-01T19:42:40Z
+- #2 completed/failure 07a2a8e 2026-11-01T18:25:01Z
+- #1 completed/failure 716d6f3 2026-10-23T14:21:56Z
 
-## create.log
-```
-試行 1 の失敗内容:
-pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)
-試行 30: まだ作成できません (12:13Z)
-試行 60: まだ作成できません (12:44Z)
-試行 90: まだ作成できません (13:15Z)
-試行 120: まだ作成できません (13:46Z)
-試行 150: まだ作成できません (14:16Z)
-試行 180: まだ作成できません (14:47Z)
-試行 210: まだ作成できません (15:18Z)
-試行 240: まだ作成できません (15:48Z)
-試行 270: まだ作成できません (16:19Z)
-試行 300: まだ作成できません (16:50Z)
-試行 330: まだ作成できません (17:21Z)
-待ち受けが終わりました: オーナーが作った PR も見つからず、create も通りませんでした
-```
+### キャンセル
+- run 44113868528 を畳みました
 
-## comment.log
-```
-(ログなし)
-```
+### 列が開いたか (最長12分)
+- 11:03Z #8 queued/ 1810c2b
+- 11:03Z #8 in_progress/ 1810c2b
 
-## merge.log
-```
-(ログなし)
-```
+### オーナー作成の PR
+- PR はまだありません (create は GITHUB_TOKEN では禁止)
