@@ -196,6 +196,40 @@ async def test_api_auth_and_dashboard():
     assert (await app.handle("GET", "https://w/api/bots/nope", {"authorization": "Bearer secret"})).status == 404
 
 
+async def test_dashboard_pages():
+    db = make_db()
+    app = make_app([carry_bot()], db, {"binance": FakeMarket(3000), "hyperliquid": FakeMarket(3000)}, token="s&c<ret")
+    assert (await app.handle("GET", "https://w/bots/carry", {})).status == 401
+    await app.scheduled("* * * * *", NOW)
+    await db.execute("INSERT INTO events (bot_id, time, level, message) VALUES ('carry', ?, 'error', '<script>x</script>')", (NOW,))
+    for i in range(3):
+        await db.execute("INSERT OR REPLACE INTO equity (bot_id, time, equity) VALUES ('carry', ?, ?)", (NOW - (i + 1) * 3_600_000, 10_000 + i))
+
+    top = await app.handle("GET", "https://w/?token=s%26c%3Cret", {}, now=NOW)
+    # 一覧: 詳細へのリンクにトークンを引き継ぐ / イベントの中身はエスケープする
+    assert top.status == 200 and 'href="bots/carry?token=s%26c%3Cret"' in top.body
+    assert "cron 正常" in top.body and "&lt;script&gt;x" in top.body and "<script>x" not in top.body
+
+    page = await app.handle("GET", "https://w/bots/carry?token=s%26c%3Cret&range=7d", {}, now=NOW)
+    assert page.status == 200 and "持ち高" in page.body and "ETH:perp@hyperliquid" in page.body
+    assert "data-pts=" in page.body and 'class="on" href="carry?token=s%26c%3Cret&range=7d"' in page.body
+    assert "&lt;script&gt;x" in page.body and "<script>x" not in page.body
+    # トークンなしで見られる環境ではリンクに何も足さない
+    assert (await app.handle("GET", "https://w/bots/nope", {"Authorization": "Bearer s&c<ret"})).status == 404
+    bearer = await app.handle("GET", "https://w/bots/carry?range=bogus", {"Authorization": "Bearer s&c<ret"}, now=NOW)
+    assert bearer.status == 200 and 'href="carry?range=30d"' in bearer.body and "token=" not in bearer.body
+
+
+def test_downsample_keeps_ends():
+    from tbf.core.types import EquityPoint
+    from tbf.worker.dashboard import downsample
+
+    pts = [EquityPoint(i, float(i)) for i in range(10_000)]
+    out = downsample(pts, 400)
+    assert len(out) == 400 and out[0] is pts[0] and out[-1] is pts[-1]
+    assert downsample(pts[:5], 400) == pts[:5]
+
+
 async def test_manual_halt_and_daily_report():
     db, http = make_db(), FakeHttp()
     app = make_app([carry_bot()], db, {"binance": FakeMarket(3000), "hyperliquid": FakeMarket(3000)}, http)
