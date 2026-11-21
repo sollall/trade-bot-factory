@@ -94,15 +94,3 @@ async def test_halt_flatten_is_not_measured():
     rows = await db.query("SELECT * FROM fills ORDER BY id")
     assert len(rows) == 4 and rows[2]["gap_bps"] is None and rows[3]["delay_ms"] is None
 
-
-def test_preview_report_shows_execution():
-    import importlib.util
-    from pathlib import Path
-
-    spec = importlib.util.spec_from_file_location("preview", Path(__file__).resolve().parent.parent / "scripts" / "preview.py")
-    preview = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(preview)
-    bots = [{"id": "x", "status": "running", "equity": 1000, "metrics": {"trades": 0},
-             "execution": {"delay_avg_sec": 2.04, "delay_p95_sec": 5.5, "gap_bps": 1.234, "gap_usd": 0.5}}]
-    body = preview.render_report({}, (200, {}), (200, bots), 0)
-    assert "2.0s / 5.5s | +1.2bps (+0.50 USD)" in body and "対バックテスト" in body

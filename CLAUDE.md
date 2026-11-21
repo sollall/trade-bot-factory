@@ -44,7 +44,7 @@ python -m tbf.backtest --bot <id> --days 180
 | エージェント | 任せること |
 |---|---|
 | `strategist` | `bots/` に戦略を書く・変える、バックテストで一次評価 |
-| `validator` | 候補を独立に疑って検証する。paper-trial に出す前と live に上げる前は必ず通す |
+| `validator` | 候補を独立に疑って検証する。paper に出す前と live に上げる前は必ず通す |
 | `platform-engineer` | `tbf/`・`worker/`・`migrations/`・`scripts/`・CI の実装と修正 |
 | `ops-investigator` | 動いている Worker の不調を読み取りだけで切り分ける |
 

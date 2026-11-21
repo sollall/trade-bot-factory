@@ -41,9 +41,7 @@ class Settings:
     admin_token: Optional[str] = None
     # cron が正常に終わるたびに GET する URL (Healthchecks.io / Uptime Kuma の push 監視など。死活監視用)
     heartbeat_url: Optional[str] = None
-    # PR ごとのお試し Worker: deploy の指定に関係なく、ビルドに入れた bot を全部 paper で動かす
-    preview: bool = False
-    # 通知の先頭に付ける名前 (既定は mode。PR の Worker では "pr-12" など)
+    # 通知の先頭に付ける名前 (既定は mode)
     instance: Optional[str] = None
 
     @classmethod
@@ -51,8 +49,6 @@ class Settings:
         mode = get("MODE") or ""
         if mode not in ("paper", "live"):
             raise ValueError(f'MODE must be "paper" or "live" (got "{mode}")')
-        if get("PREVIEW") == "true" and mode != "paper":
-            raise ValueError("PREVIEW は MODE=paper でだけ使えます")
         return cls(
             mode=mode,
             coinbase_url=get("COINBASE_URL") or EXCHANGE_URL,
@@ -64,7 +60,6 @@ class Settings:
             notify_fills=(get("NOTIFY_FILLS") or "true") == "true",
             admin_token=get("ADMIN_TOKEN"),
             heartbeat_url=get("HEARTBEAT_URL"),
-            preview=(get("PREVIEW") or "") == "true",
             instance=get("INSTANCE"),
         )
 
@@ -94,7 +89,7 @@ class App:
         self.settings = settings
         self.build = build
         self.clock = clock or (lambda: int(time.time() * 1000))
-        self.bots = list(bots) if settings.preview else bots_for_mode(bots, settings.mode)
+        self.bots = bots_for_mode(bots, settings.mode)
         self.store = Store(db)
         self.http = http
         self.markets = markets or default_markets(http, settings.coinbase_url, settings.hyperliquid_url)
