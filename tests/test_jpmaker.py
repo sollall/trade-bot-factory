@@ -26,6 +26,7 @@ from tbf.jpmaker.measure import (
     FillEcon,
     Measurement,
     PairData,
+    cells_for_window,
     economics,
     load,
     run_all,
@@ -43,6 +44,7 @@ from tbf.jpmaker.report import (
     section_adverse_distribution,
     section_uptime,
     section_verdict,
+    section_window_breakdown,
     walkforward,
     walkforward_row_line,
 )
@@ -797,3 +799,36 @@ def test_report_period_does_not_slide_off_the_head_of_the_record(tmp_path):
     assert "--period record" in build_report(store, m, period="record")
     assert "--period trailing" in build_report(store, m, period="trailing")
     assert "記録の先頭が削られる" in build_report(store, m, period="trailing")
+
+
+def test_window_breakdown_components_add_up_to_the_net():
+    """窓の行が負のとき「取れていない」のか「取れたが返している」のかを読めること。
+
+    §6 は純益と年率しか出さないので、取り・逆選択・ヘッジのどれが効いたのか
+    分からない。成分は判定に使う Cell から取り出すだけで、4 列の合計が §6 の
+    純益に一致すること (別の式で出し直していないこと) を固定する。
+    """
+    m = _measurement_with_outlier_fills(n_windows=2)
+    text = section_window_breakdown(m)
+
+    days = min(declared.WALK_WINDOW_DAYS)
+    seen = 0
+    for ws, we in window_bounds(m.since, m.until, days):
+        for size in declared.SIZES_JPY:
+            _, tot = cells_for_window(m, ws, we, size, declared.DECISION_MODE)
+            assert tot.gross_jpy - tot.adverse_jpy - tot.hedge_jpy == pytest.approx(tot.net_jpy)
+            # 窓の行 (§6) が出す純益と同じ値であること
+            rows = [r for r in walkforward(m, size, days) if r.start == ws]
+            assert rows and rows[0].net_jpy == pytest.approx(tot.net_jpy)
+            seen += 1
+    assert seen == 2 * len(declared.SIZES_JPY)
+
+    # 外れ値 1 件 (500bp) を含む窓なので、取りより逆選択が大きく、純益は負
+    assert "逆選択" in text and "ヘッジ" in text and "純bps" in text
+    for size in declared.SIZES_JPY:
+        assert f"1 注文 {size / 10_000:.0f}万円" in text
+
+    # 約定が無い窓で 0 除算にならず、「内訳を出せない」と書くこと (0.0 bps と出さない)
+    m.until += 86_400_000
+    empty = section_window_breakdown(m)
+    assert "約定額ゼロ" in empty

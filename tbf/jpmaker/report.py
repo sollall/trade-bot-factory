@@ -543,6 +543,41 @@ def section_walkforward(m: Measurement) -> str:
     return "\n".join(out)
 
 
+def section_window_breakdown(m: Measurement) -> str:
+    """窓ごとに「取った半スプレッドをどこで返したか」を成分で出す。
+
+    §6 の行は純益と年率しか出さないので、負の窓が「取れていない」のか
+    「取れたが逆選択とヘッジで返している」のかが読めない。判定に使う
+    `Cell` から成分をそのまま取り出すだけで、式も線も変えない。
+    """
+    out = [
+        "== 6-b. 窓ごとの内訳 (取った半スプレッドをどこで返したか)",
+        "   取り = 約定金額 x (半スプレッド + メイカー優遇)、ヘッジ = スリッページ + テイカー x 2。",
+        f"   逆選択は式に入る {declared.ADVERSE_HORIZON_FOR_NET_SEC} 秒の列。bps は約定金額に対する比。",
+        "   成分は §6 の純益と同じ Cell から取り出しているので、4 列の合計は純益に一致する。",
+    ]
+    days = min(declared.WALK_WINDOW_DAYS)
+    for size in declared.SIZES_JPY:
+        out.append(f"\n-- 1 注文 {size / 10_000:.0f}万円 / {days:.0f} 日窓 (宣言グリッド {len(m.data)} 銘柄・保守側)")
+        out.append(
+            "窓             約定     約定額(円)   取り(円) 逆選択(円) ヘッジ(円)   純益(円)  "
+            "取りbps 逆選択bps ヘッジbps  純bps"
+        )
+        for ws, we in window_bounds(m.since, m.until, days):
+            _, tot = cells_for_window(m, ws, we, size, declared.DECISION_MODE)
+            if not tot.filled_jpy:
+                out.append(f"{_ts(ws):<14} {tot.n_fills:>5}  (約定額ゼロ — 内訳は出せない)")
+                continue
+            r = 10_000.0 / tot.filled_jpy
+            out.append(
+                f"{_ts(ws):<14} {tot.n_fills:>5} {tot.filled_jpy:>13,.0f} {tot.gross_jpy:>10,.0f} "
+                f"{-tot.adverse_jpy:>10,.0f} {-tot.hedge_jpy:>10,.0f} {tot.net_jpy:>10,.0f}  "
+                f"{tot.gross_jpy * r:>7.1f} {tot.adverse_jpy * r:>9.1f} {tot.hedge_jpy * r:>9.1f} "
+                f"{tot.net_jpy * r:>6.1f}"
+            )
+    return "\n".join(out)
+
+
 # --- 合否 ---
 def section_verdict(m: Measurement) -> str:
     out = [
@@ -603,6 +638,7 @@ def build_report(store: JpMakerStore, m: Measurement, period: str = "record") ->
         [
             "\n".join(head),
             section_walkforward(m),
+            section_window_breakdown(m),
             section_verdict(m),
             section_residency(m),
             section_fills(m),
