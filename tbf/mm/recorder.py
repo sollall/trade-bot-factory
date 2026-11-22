@@ -1,0 +1,156 @@
+"""記録: 気配 (l2Book) と約定 (recentTrades) をポーリングして残す。売買はしない。鍵も要らない"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Callable, Optional
+
+from tbf.http import Http
+from tbf.market.hyperliquid import INFO_URL, _post
+from tbf.mm.book import Book, Trade
+from tbf.mm.store import MmStore
+
+# ---- 流量制限
+#
+# Hyperliquid の info は IP ごとに毎分の重みの上限があり、リクエストの種類で重みが違う。
+# 下の 3 つの値は **未確認** (記憶にある値。公式ドキュメント hyperliquid.gitbook.io の rate limits は
+# この環境から届かず、確かめられていない)。確かめたら直してこのコメントを消す。
+# 外れていても上限を踏まないように、既定では上限の半分までしか使わない (DEFAULT_BUDGET)。
+WEIGHT_LIMIT_PER_MIN = 1200
+WEIGHTS = {"l2Book": 2, "recentTrades": 20, "meta": 20}
+#: 上限のうち使ってよい割合。残りは、429 の取り直し (tbf/http.py。1 回の失敗で最大 4 回投げる) と、
+#: 同じ IP から出る他の用途 (バックテストの足の取得など) のために空けておく
+DEFAULT_BUDGET = 0.5
+#: 429 を受けたら、この秒数は何も投げない (取り直しを重ねて制限を長引かせないため)
+COOLDOWN_SEC = 30.0
+
+
+def weight_per_min(n_coins: int, interval: float, trades_interval: float) -> float:
+    """この設定が毎分使う重み (取り直しは含まない)"""
+    return n_coins * (WEIGHTS["l2Book"] * 60 / interval + WEIGHTS["recentTrades"] * 60 / trades_interval)
+
+
+def check_budget(n_coins: int, interval: float, trades_interval: float, budget: float = DEFAULT_BUDGET) -> float:
+    """毎分の重みが使ってよい量を超える設定なら ValueError。超えなければその重みを返す"""
+    if interval <= 0 or trades_interval <= 0:
+        raise ValueError("間隔は正の秒数にしてください")
+    if not 0 < budget <= 1:
+        raise ValueError("--budget は 0 より大きく 1 以下 (1 = 上限いっぱい)")
+    used, allowed = weight_per_min(n_coins, interval, trades_interval), WEIGHT_LIMIT_PER_MIN * budget
+    if used > allowed:
+        raise ValueError(
+            f"流量制限を超える設定です: 毎分の重み {used:.0f} > 使ってよい量 {allowed:.0f} "
+            f"(上限 {WEIGHT_LIMIT_PER_MIN} x {budget:g})。銘柄を減らすか、間隔を延ばしてください "
+            f"(気配 1 回 = {WEIGHTS['l2Book']}、約定 1 回 = {WEIGHTS['recentTrades']})"
+        )
+    return used
+
+
+def parse_book(raw: dict, depth: int) -> Book:
+    bids, asks = ([(float(l["px"]), float(l["sz"])) for l in side[:depth]] for side in raw["levels"])
+    if not bids or not asks:
+        raise ValueError("気配の片側が空")
+    return Book(int(raw["time"]), tuple(bids), tuple(asks))
+
+
+def parse_trades(raw: list) -> list[Trade]:
+    return [Trade(int(t["time"]), t["side"], float(t["px"]), float(t["sz"]), int(t["tid"])) for t in raw]
+
+
+class Recorder:
+    def __init__(
+        self,
+        http: Http,
+        store: MmStore,
+        coins: list[str],
+        interval: float = 2.0,
+        trades_interval: float = 10.0,
+        depth: int = 10,
+        clock: Callable[[], int] = lambda: int(time.time() * 1000),
+        log: Callable[[str], None] = print,
+        url: str = INFO_URL,
+    ) -> None:
+        self.http, self.store, self.coins, self.url = http, store, coins, url
+        self.interval, self.trades_interval, self.depth = interval, trades_interval, depth
+        self.clock, self.log = clock, log
+        # 銘柄ごとの「これまでに見た約定」。前回止まった間の取りこぼしも分かるように、記録から引き継ぐ
+        self.seen: dict[str, set[tuple[int, int]]] = {c: set(store.recent_trade_keys(c)) for c in coins}
+        self.gaps = 0
+        self.rate_limited = False
+
+    async def setup(self) -> None:
+        """銘柄が実在するか確かめ、数量の小数桁 (値段の刻みを決めるのに要る) を残す"""
+        meta = await _post(self.http, {"type": "meta"}, self.url)
+        decimals = {u["name"]: int(u["szDecimals"]) for u in meta["universe"] if not u.get("isDelisted")}
+        missing = [c for c in self.coins if c not in decimals]
+        if missing:
+            raise ValueError(f"Hyperliquid の無期限先物に無い銘柄: {', '.join(missing)}")
+        for c in self.coins:
+            self.store.set_coin(c, decimals[c], self.clock())
+        self.store.commit()
+
+    async def _fetch(self, kind: str, coin: str, handle: Callable[[object, int], int]) -> None:
+        now, started = self.clock(), time.monotonic()
+        try:
+            raw = await _post(self.http, {"type": kind, "coin": coin}, self.url)
+            latency = (time.monotonic() - started) * 1000
+            self.store.add_poll(now, coin, kind, latency, None, handle(raw, self.clock()))
+        except Exception as e:  # noqa: BLE001  1 銘柄の失敗で他を止めない
+            msg = f"{type(e).__name__}: {e}"
+            self.rate_limited = self.rate_limited or "HTTP 429" in msg
+            self.store.add_poll(now, coin, kind, None, msg[:300], None)
+            self.log(f"[{coin}] {kind} error: {msg[:200]}")
+
+    def _on_trades(self, coin: str, raw: object, recv: int) -> int:
+        trades = parse_trades(raw)  # type: ignore[arg-type]
+        keys = {(t.time, t.tid) for t in trades}
+        seen = self.seen[coin]
+        # recentTrades は直近の 10 件ほどしか返さない。前回までと 1 件も重ならなければ、
+        # その間の約定を取りこぼしたかもしれない (ちょうど全部が新しいだけ、のこともある。件数は分からない)
+        if keys and seen and not keys & seen:
+            self.store.add_gap(coin, recv, max(t for t, _ in seen), min(t.time for t in trades))
+            self.gaps += 1
+        new = self.store.add_trades(coin, trades, recv)
+        if keys:
+            self.seen[coin] = keys  # 次に比べる相手は直近の応答だけで足りる
+        return new
+
+    async def poll_books(self) -> None:
+        await asyncio.gather(*(
+            self._fetch("l2Book", c, lambda raw, recv, c=c: self.store.add_book(c, parse_book(raw, self.depth), recv))
+            for c in self.coins
+        ))
+        self.store.commit()
+
+    async def poll_trades(self) -> None:
+        await asyncio.gather(*(
+            self._fetch("recentTrades", c, lambda raw, recv, c=c: self._on_trades(c, raw, recv)) for c in self.coins
+        ))
+        self.store.commit()
+
+    async def run(self, stop: Optional[asyncio.Event] = None, max_seconds: Optional[float] = None) -> None:
+        stop = stop or asyncio.Event()
+        started = time.monotonic()
+        next_book = next_trades = started
+        while not stop.is_set() and (max_seconds is None or time.monotonic() - started < max_seconds):
+            now = time.monotonic()
+            try:
+                if now >= next_trades:
+                    await self.poll_trades()
+                    next_trades = max(next_trades + self.trades_interval, now)
+                if now >= next_book:
+                    await self.poll_books()
+                    next_book = max(next_book + self.interval, now)
+            except Exception as e:  # noqa: BLE001  記録は止めない
+                self.log(f"poll failed: {type(e).__name__}: {e}")
+                next_book, next_trades = max(next_book, now + self.interval), max(next_trades, now + self.interval)
+            if self.rate_limited:
+                self.rate_limited = False
+                self.log(f"429 (流量制限) を受けたので {COOLDOWN_SEC:.0f} 秒休みます")
+                next_book = next_trades = time.monotonic() + COOLDOWN_SEC
+            delay = max(0.0, min(next_book, next_trades) - time.monotonic())
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
