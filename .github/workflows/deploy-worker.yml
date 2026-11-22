@@ -39,8 +39,13 @@ jobs:
 
       - name: Preflight (positions left by removed bots)
         run: |
-          npx wrangler d1 execute "$DB_NAME" --env "$TARGET" --remote --json \
-            --command "SELECT bot_id, status, portfolio, qty FROM bot_state" > rows.json
+          # --json のときは wrangler のエラー文も標準出力 (= rows.json) に入る。失敗したら中身を出さないと原因が見えない
+          if ! npx wrangler d1 execute "$DB_NAME" --env "$TARGET" --remote --json \
+            --command "SELECT bot_id, status, portfolio, qty FROM bot_state" > rows.json; then
+            echo "::error::D1 ($DB_NAME) の読み出しに失敗しました。wrangler の出力:"
+            head -c 4000 rows.json
+            exit 1
+          fi
           python scripts/deploy_guard.py preflight --mode "$TARGET" --rows rows.json --allow "${{ vars.ALLOW_UNMANAGED }}"
 
       - name: D1 bookmark (Time Travel)
