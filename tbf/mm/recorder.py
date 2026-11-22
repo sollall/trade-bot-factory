@@ -70,7 +70,12 @@ class Recorder:
         clock: Callable[[], int] = lambda: int(time.time() * 1000),
         log: Callable[[str], None] = print,
         url: str = INFO_URL,
+        on_book: Optional[Callable[[str, Book, int], None]] = None,
+        on_trades: Optional[Callable[[str, list[Trade], int], None]] = None,
     ) -> None:
+        # on_book(銘柄, 新しく残した気配, 受け取った時刻) / on_trades(銘柄, 新しく残した約定, 取りにいった時刻)。
+        # 記録に残したものだけを、残した後に渡す (paper が記録と同じものを見るように)。時刻は clock の ms
+        self.on_book, self.on_trades = on_book, on_trades
         self.http, self.store, self.coins, self.url = http, store, coins, url
         self.interval, self.trades_interval, self.depth = interval, trades_interval, depth
         self.clock, self.log = clock, log
@@ -90,19 +95,26 @@ class Recorder:
             self.store.set_coin(c, decimals[c], self.clock())
         self.store.commit()
 
-    async def _fetch(self, kind: str, coin: str, handle: Callable[[object, int], int]) -> None:
+    async def _fetch(self, kind: str, coin: str, handle: Callable[[object, int, int], int]) -> None:
         now, started = self.clock(), time.monotonic()
         try:
             raw = await _post(self.http, {"type": kind, "coin": coin}, self.url)
             latency = (time.monotonic() - started) * 1000
-            self.store.add_poll(now, coin, kind, latency, None, handle(raw, self.clock()))
+            self.store.add_poll(now, coin, kind, latency, None, handle(raw, now, self.clock()))
         except Exception as e:  # noqa: BLE001  1 銘柄の失敗で他を止めない
             msg = f"{type(e).__name__}: {e}"
             self.rate_limited = self.rate_limited or "HTTP 429" in msg
             self.store.add_poll(now, coin, kind, None, msg[:300], None)
             self.log(f"[{coin}] {kind} error: {msg[:200]}")
 
-    def _on_trades(self, coin: str, raw: object, recv: int) -> int:
+    def _on_book(self, coin: str, raw: object, recv: int) -> int:
+        book = parse_book(raw, self.depth)  # type: ignore[arg-type]
+        new = self.store.add_book(coin, book, recv)
+        if new and self.on_book:
+            self.on_book(coin, book, recv)
+        return new
+
+    def _on_trades(self, coin: str, raw: object, started: int, recv: int) -> int:
         trades = parse_trades(raw)  # type: ignore[arg-type]
         keys = {(t.time, t.tid) for t in trades}
         seen = self.seen[coin]
@@ -114,18 +126,21 @@ class Recorder:
         new = self.store.add_trades(coin, trades, recv)
         if keys:
             self.seen[coin] = keys  # 次に比べる相手は直近の応答だけで足りる
-        return new
+        if self.on_trades:
+            self.on_trades(coin, new, started)
+        return len(new)
 
     async def poll_books(self) -> None:
         await asyncio.gather(*(
-            self._fetch("l2Book", c, lambda raw, recv, c=c: self.store.add_book(c, parse_book(raw, self.depth), recv))
+            self._fetch("l2Book", c, lambda raw, started, recv, c=c: self._on_book(c, raw, recv))
             for c in self.coins
         ))
         self.store.commit()
 
     async def poll_trades(self) -> None:
         await asyncio.gather(*(
-            self._fetch("recentTrades", c, lambda raw, recv, c=c: self._on_trades(c, raw, recv)) for c in self.coins
+            self._fetch("recentTrades", c, lambda raw, started, recv, c=c: self._on_trades(c, raw, started, recv))
+            for c in self.coins
         ))
         self.store.commit()
 

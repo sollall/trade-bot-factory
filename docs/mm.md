@@ -16,6 +16,9 @@ python -m tbf.mm record --coins INJ,MON,ZRO      # 記録 (Ctrl-C か SIGTERM �
 python -m tbf.mm report [--hours 6]              # 記録した市場の様子
 python -m tbf.mm replay --coin INJ               # 基準のクォーターで再生
 python -m tbf.mm replay --coin INJ --param half_spread_bps=4 --param skew_bps=6
+python -m tbf.mm paper --coins MON,INJ           # 記録しながら、その場で疑似的に約定を付ける (record を兼ねる)
+python -m tbf.mm paper-report [--run 3]          # paper の成績 (run ごと、日ごと、時間帯ごと)
+python -m tbf.mm replay --run 3                  # paper の run を記録から流し直して突き合わせる
 ```
 
 記録先は `--db` (既定 `data/mm.sqlite`。`data/` は git に入りません)。`--hours N` は「今から」ではなく
@@ -25,7 +28,9 @@ python -m tbf.mm replay --coin INJ --param half_spread_bps=4 --param skew_bps=6
 |---|---|
 | `record` | `--interval` 気配を取る間隔の秒 (2)、`--trades-interval` 約定を取る間隔の秒 (10)、`--depth` 残す段数 (10)、`--budget` 流量制限のうち使う割合 (0.5)、`--minutes` この分数で止める |
 | `report` | `--maker-bps` メイカー手数料 (1.5) |
-| `replay` | `--coin`、`--param k=v` (何度でも)、`--maker-bps` (1.5)、`--latency-ms` 指値が板に載るまでの遅れ (250)、`--horizons` 逆選択を測る秒数 (5,30,60)、`--no-cross-fill` 約定の仮定 (c) を外す |
+| `paper` | `record` のオプション + `--param k=v`、`--maker-bps` (別名 `--fee-bps`)、`--latency-ms`、`--no-cross-fill` |
+| `paper-report` | `--run` (省くと最後の run)、`--hours`、`--horizons` |
+| `replay` | `--coin`、`--run` (paper の run と同じ設定・区間で再生)、`--param k=v` (何度でも)、`--maker-bps` (1.5)、`--latency-ms` 指値が板に載るまでの遅れ (250)、`--horizons` 逆選択を測る秒数 (5,30,60)、`--no-cross-fill` 約定の仮定 (c) を外す |
 
 ## 記録 (`record`)
 
@@ -146,6 +151,106 @@ def my_quoter(book: Book, inventory: float, params: dict[str, float]) -> Quote:
 
 既定値は出発点で、採用の判断に使った値ではありません。
 
+## 実況の paper (`paper` / `paper-report`)
+
+`record` と同じポーリングで気配と約定を **記録しながら**、同じクォーターをその場で動かし、疑似的に約定を付けます。
+発注はしません。鍵も要りません。記録は `record` と同じテーブルに同じ形で残るので、あとで `replay` にそのまま使えます。
+
+```bash
+python -m tbf.mm paper --coins MON,INJ --param half_spread_bps=4
+python -m tbf.mm paper-report                 # 最後の run
+python -m tbf.mm paper-report --run 3 --hours 24
+```
+
+**`paper` は記録を兼ねます。別に `record` を回さないでください。** 同じ IP で両方回すと流量制限の重みが倍になります
+(起動時の歯止めは 1 つのプロセスの分しか数えません)。
+
+### 再生と同じコードで約定を付ける
+
+約定の判定は `replay` と同じ `Sim` (`tbf/mm/replay.py`) だけを通ります。仮定 (a)(b)(c)、板に載るまでの遅れ、
+ポストオンリーなどはすべて上の「再生」のとおりです。**paper が貯めた記録を後から流し直すと、同じ結果になります。**
+突き合わせるコマンドがあります:
+
+```bash
+python -m tbf.mm replay --run 3     # run 3 と同じ設定・同じ区間を再生し、末尾に「paper run 3 との突き合わせ: 一致」と出す
+```
+
+これを成り立たせるために、気配は受け取ってすぐには処理しません。約定のポーリングは気配より間隔が長く、
+気配を受け取った時点では、それ以前の約定がまだ全部は届いていないからです。気配は、**それを受け取った後に
+始めた約定のポーリングが成功してから** 処理します。成績は実際の時計より最大で約定の間隔 (既定 10 秒) ぶん遅れて
+付きますが、クォーターが見るのはその気配と、その時点までの約定で決まる在庫だけで、再生と同じです。
+止めたときに未処理だった最後の数件の気配は、その run の成績に入りません (記録には残ります)。
+
+### 再生と食い違いうる点
+
+食い違いうる出来事は回数を数えて `paper-report` の「食い違い」の列に出します。0 なら `replay --run` と一致するはずです。
+
+- **遅れた約定**: 処理済みの気配より前の時刻の約定が、後から届いた。paper はもう通り過ぎているので使えませんが、
+  再生は記録に残った時刻どおりに使います。
+- **遅れた気配**: 処理済みの気配より前の時刻の気配が、後から届いた。
+
+ほかに食い違う場合:
+
+- run の後で、その区間の記録を足したり消したりしたとき。
+- コード (`Sim` やクォーター) を run の後で変えたとき。`replay --run` は今のコードで流し直します。run に残るのは
+  クォーターの名前とパラメータだけで、コードの版は残していません。
+- クォーターが落ちたとき。その銘柄の paper はそこで止め (ログに出ます)、記録は続けます。再生は最後まで流そうとして同じ所で落ちます。
+
+逆選択の「N 秒後」は、どちらも記録から後で引いています (区間より後の気配も使う)。
+
+### 再起動すると新しい run
+
+止めて起動し直すと **新しい run として在庫 0 から** 始まります。前の run の在庫や損益は引き継ぎません (起動時のログにも出ます)。
+記録 (気配・約定) は同じ sqlite の続きに足されます。パラメータを変えた実行が混ざらないよう、成績はすべて run の id で分かれていて、
+`paper-report` は run どうしを足しません。落ちて systemd が起動し直した場合も新しい run になるので、
+長く回した成績を見るときは run が切れていないかを先に確かめてください。
+
+### 残るもの
+
+| テーブル | 中身 |
+|---|---|
+| `paper_runs` | run ごとの設定: 開始・停止の時刻、銘柄、クォーター名、パラメータ、手数料、遅れ、仮定 (c) の有無、ポーリングの間隔 |
+| `paper_fills` | 疑似約定: 時刻、銘柄、向き (1 = 買い、-1 = 売り)、値段、数量、種類 (`through` = (a)、`queue` = (b)、`cross` = (c))、手数料、直前のミッド |
+| `paper_account` | 口座のスナップショット (1 分に 1 行): 在庫、現金、手数料、ミッド、評価損益、食い違いの回数、成績の内訳 (JSON) |
+
+### `paper-report` の読み方
+
+- 最初の表が銘柄ごとの 1 行と合計。その下に、`replay` と同じ形の銘柄ごとの内訳が続きます。
+- **日ごと・時間帯ごと (UTC の時) の損益** は、口座の評価額の差です。持っている在庫の値動きを含みます。
+  1 分ごとのスナップショットから出しているので、時間の境目は最大 1 分ずれます。
+- `--hours N` は run の末尾から N 時間ぶん。始点で持っていた在庫は、始点のミッドで買ったものとして数え直します。
+- ファンディングと、残った在庫を閉じる費用は入っていません。
+
+### 日次のまとめ
+
+環境変数 `WEBHOOK_URL` (Discord / Slack 互換) があれば、起動時に 1 回と、以後 24 時間ごとに直近 24 時間のまとめを送ります。
+未設定なら何も送りません。
+
+### サーバーへの設置 (人間がやる)
+
+`deploy/mm-paper.service` が systemd の unit の雛形です (`deploy/arb-shadow.service` と同じサンドボックス)。
+`deploy/setup-server.sh` は mm を設置しません。arb を設置済みのサーバー (コードが `/opt/trade-bot-factory` にある) なら:
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin mm
+sudo install -d -m 0700 -o root -g root /etc/mm
+sudo tee /etc/mm/env >/dev/null <<'ENV'
+MM_COINS=MON,INJ
+# MM_ARGS=--param half_spread_bps=4
+# WEBHOOK_URL=https://discord.com/api/webhooks/...
+ENV
+sudo chmod 0600 /etc/mm/env
+sudo install -m 0644 /opt/trade-bot-factory/deploy/mm-paper.service /etc/systemd/system/mm-paper.service
+sudo systemctl daemon-reload && sudo systemctl enable --now mm-paper
+journalctl -u mm-paper -f
+sudo -u mm python3 -m tbf.mm paper-report --db /var/lib/mm/mm.sqlite     # /opt/trade-bot-factory で実行
+```
+
+- 記録は `/var/lib/mm/mm.sqlite` (1 銘柄・2 秒間隔で 1 日 25MB ほど増えます。消す仕組みはありません)。
+- `MM_COINS` や `MM_ARGS` を変えたら `sudo systemctl restart mm-paper`。新しい run になります。
+- 既定の間隔なら 3 銘柄までです (流量制限の歯止め)。arb と同じサーバーで回しても、Hyperliquid を叩くのは mm だけなので重みは変わりません。
+- この雛形は実際の systemd では試していません。
+
 ## 確かめたこと・確かめていないこと
 
 確かめたこと (2026-11-22、手元から公開 API で):
@@ -160,7 +265,13 @@ def my_quoter(book: Book, inventory: float, params: dict[str, float]) -> Quote:
 - 毎分の重みが計算上 570〜600 の設定で計 27 分回して、429 は 0 回。これは「この量では止められなかった」
   というだけで、重みの値が正しいことの確認ではない。
 
+- 実況の paper を 3 銘柄で 4 分 (SIGTERM で停止) + 11 分回し、どちらの run も `replay --run` と約定・損益が一致。
+  遅れた約定・遅れた気配は 0 回。止めた後の sqlite は `PRAGMA integrity_check` が ok。
+
 確かめていないこと:
+
+- paper を長時間回したときに「遅れた約定」がどれだけ出るか (15 分で 0 回、というだけ)。
+- 日次のまとめの Webhook 送信 (24 時間後に初めて動くので、実際には一度も走らせていない) と、`deploy/mm-paper.service` の実機での動作。
 
 - 流量制限の重みと上限 (上記)。
 - 手数料・刻み・最小注文額 (10 ドルと仮定) の公式ドキュメントでの裏取り。割引 (出来高・ステーキング・紹介) は未考慮。
@@ -204,7 +315,7 @@ def my_quoter(book: Book, inventory: float, params: dict[str, float]) -> Quote:
 
 - **WebSocket での記録** (`l2Book` / `trades` の購読)。約定の取りこぼしと、気配の間の順序の問題がなくなります。
   標準ライブラリに WebSocket が無いので、依存を足すか自前で書くかを決める必要があります (本体は標準ライブラリだけ、の方針)。
-- 常時起動のサーバーでの長時間の記録 (`deploy/arb-shadow.service` と同じ形)。
+- 常時起動のサーバーで paper を数日回す (`deploy/mm-paper.service`)。
 - 流量制限と手数料の公式の値での裏取り。
 - ファンディングの計上 (`tbf/market/hyperliquid.py` の `fetch_funding` が使えます)。
 - 複数銘柄を合わせた在庫とリスクの上限。

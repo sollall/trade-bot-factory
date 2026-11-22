@@ -80,17 +80,20 @@ class Fill:
 
 @dataclass
 class Result:
+    """シミュレータの成績。足し上げていく値をそのまま持ち、損益などはそこから出す
+    (paper はこれを丸ごと sqlite に残し、後から同じ形に戻す)"""
+
     fills: list[Fill] = field(default_factory=list)
     spread_pnl: float = 0.0
-    fee_pnl: float = 0.0
     inventory_pnl: float = 0.0
-    total_pnl: float = 0.0  # 現金の出入り + 残った在庫の評価 - 手数料 (内訳とは別に計算する)
+    cash: float = 0.0  # 売買の現金の出入り (手数料は別)
+    fees: float = 0.0  # 払った手数料 (リベートなら負)
     position: float = 0.0
     last_mid: float = 0.0
     max_abs_position: float = 0.0
     max_abs_position_usd: float = 0.0
-    avg_position: float = 0.0  # 時間平均 (枚数)
-    avg_abs_position: float = 0.0
+    area: float = 0.0  # 在庫 x 時間 (ms)
+    abs_area: float = 0.0
     observed_ms: int = 0  # 記録の切れ目を除いた長さ
     books: int = 0
     breaks: int = 0
@@ -102,6 +105,24 @@ class Result:
     #: 約定から N 秒後のミッドで測った取り分 (bps、数量で加重)。N -> (値, 数えた約定の件数)
     markouts: dict[int, tuple[float, int]] = field(default_factory=dict)
     edge_bps: float = 0.0  # 約定した瞬間の取り分 (bps、数量で加重)
+
+    @property
+    def fee_pnl(self) -> float:
+        return -self.fees
+
+    @property
+    def total_pnl(self) -> float:
+        """現金の出入り + 残った在庫の評価 - 手数料 (内訳とは別に計算する)"""
+        return self.cash + self.position * self.last_mid - self.fees
+
+    @property
+    def avg_position(self) -> float:
+        """時間平均 (枚数)"""
+        return self.area / self.observed_ms if self.observed_ms else 0.0
+
+    @property
+    def avg_abs_position(self) -> float:
+        return self.abs_area / self.observed_ms if self.observed_ms else 0.0
 
     @property
     def volume_usd(self) -> float:
@@ -121,6 +142,162 @@ def queue_ahead(book: Book, side: int, px: float) -> float:
     return next((sz for p, sz in levels if p == px), 0.0)
 
 
+class Sim:
+    """1 銘柄ぶんのシミュレータ。気配を 1 つずつ食わせる。
+
+    再生 (simulate) も実況の paper (tbf/mm/paper.py) も、約定の判定はここだけを通る。
+    step(book, trades) の trades は「前の気配より後、この気配以前」の約定。順は問わない。
+    """
+
+    def __init__(
+        self,
+        quoter: Quoter,
+        params: dict[str, float],
+        *,
+        sz_decimals: int,
+        maker_rate: float = DEFAULT_MAKER_RATE,
+        latency_ms: int = DEFAULT_LATENCY_MS,
+        max_book_gap_ms: int = MAX_BOOK_GAP_MS,
+        cross_fills: bool = True,
+    ) -> None:
+        self.quoter, self.params, self.sz_decimals = quoter, params, sz_decimals
+        self.maker_rate, self.latency_ms = maker_rate, latency_ms
+        self.max_book_gap_ms, self.cross_fills = max_book_gap_ms, cross_fills
+        self.res = Result()
+        self.live: dict[int, Optional[Order]] = {BUY: None, SELL: None}
+        self.pending: Optional[tuple[int, Quote, Book]] = None  # (板に載る時刻, 出したい指値, 決めたときの気配)
+        self.prev: Optional[Book] = None
+        self.clock = 0
+        self.mid = 0.0  # 直前の気配のミッド
+
+    def _advance(self, t: int) -> None:
+        r = self.res
+        r.area += r.position * (t - self.clock)
+        r.abs_area += abs(r.position) * (t - self.clock)
+        r.observed_ms += t - self.clock
+        self.clock = t
+
+    def _fill(self, o: Order, size: float, t: int, kind: str) -> None:
+        if size <= 0:
+            return
+        r = self.res
+        self._advance(max(t, self.clock))
+        o.remaining = round(o.remaining - size, 9)
+        r.position = round(r.position + o.side * size, 9)
+        r.cash -= o.side * size * o.px
+        r.fees += self.maker_rate * size * o.px
+        r.spread_pnl += o.side * (self.mid - o.px) * size
+        r.fills.append(Fill(t, o.side, o.px, size, self.mid, kind))
+        r.max_abs_position = max(r.max_abs_position, abs(r.position))
+        r.max_abs_position_usd = max(r.max_abs_position_usd, abs(r.position) * self.mid)
+
+    def _normalize(self, side: int, px: Optional[float], size: float, book: Book) -> Optional[tuple[float, float]]:
+        if px is None or px <= 0:
+            return None
+        nd = price_decimals(px, self.sz_decimals)
+        px = round_down(px, nd) if side == BUY else round_up(px, nd)
+        size = round_down(size, self.sz_decimals)
+        if px <= 0 or px * size < MIN_NOTIONAL_USD:
+            self.res.too_small += 1
+            return None
+        if (side == BUY and px >= book.best_ask) or (side == SELL and px <= book.best_bid):
+            self.res.rejected += 1
+            return None
+        return px, size
+
+    def _activate_due(self, t: int) -> None:
+        if not self.pending or self.pending[0] > t:
+            return
+        _, quote, book = self.pending
+        self.pending = None
+        for side, want in ((BUY, self._normalize(BUY, quote.bid, quote.bid_size, book)),
+                           (SELL, self._normalize(SELL, quote.ask, quote.ask_size, book))):
+            cur = self.live[side]
+            if cur and cur.remaining > 0 and want and want[0] == cur.px:
+                continue  # 値段が同じなら置いたまま (列の位置を保つ)
+            if cur and cur.remaining > 0:
+                self.res.canceled += 1
+            self.live[side] = None
+            if want:
+                self.live[side] = Order(side, want[0], want[1], queue_ahead(book, side, want[0]))
+                self.res.placed += 1
+
+    def _match(self, tr: Trade) -> None:
+        o = self.live[BUY] if tr.side == "A" else self.live[SELL]
+        if any(self.live.values()):
+            self.res.market_volume_usd += tr.px * tr.sz
+        if not o or o.remaining <= 0:
+            return
+        if (tr.px - o.px) * o.side < 0:  # (a) 自分の値段を抜けた
+            o.queue = 0.0
+            self._fill(o, min(o.remaining, tr.sz), tr.time, "through")
+        elif tr.px == o.px:  # (b) 自分の値段ちょうど。まず前の列が消化される
+            eaten = min(o.queue, tr.sz)
+            o.queue -= eaten
+            self._fill(o, min(o.remaining, tr.sz - eaten), tr.time, "queue")
+
+    def step(self, book: Book, trades: list[Trade] = ()) -> list[Fill]:  # type: ignore[assignment]
+        """気配を 1 つ進める。この 1 歩で付いた約定を返す"""
+        r, prev = self.res, self.prev
+        before = len(r.fills)
+        r.books += 1
+        if prev is None:
+            self.clock, self.mid = book.time, book.mid  # 最初の気配より前の約定は、当てる指値が無い
+        elif book.time <= prev.time:
+            raise ValueError(f"気配の時刻が戻った: {prev.time} -> {book.time}")
+        elif book.time - prev.time > self.max_book_gap_ms:
+            # 記録の切れ目。見えない間のことは判定できないので、指値は前の気配の時点で取り下げたことにする
+            r.breaks += 1
+            r.canceled += sum(1 for o in self.live.values() if o and o.remaining > 0)
+            self.live[BUY] = self.live[SELL] = None
+            self.pending = None
+            self.clock = book.time
+        else:
+            for tr in sorted(trades, key=trade_order):
+                if not prev.time < tr.time <= book.time:
+                    raise ValueError(f"約定の時刻 {tr.time} が気配の間 ({prev.time}, {book.time}] に無い")
+                self._activate_due(tr.time)
+                self._match(tr)
+            self._activate_due(book.time)
+            for o in (self.live[BUY], self.live[SELL]):  # (c) 値段が自分の指値を抜けていたら約定
+                if self.cross_fills and o and o.remaining > 0 and (
+                    (o.side == BUY and book.best_ask <= o.px) or (o.side == SELL and book.best_bid >= o.px)
+                ):
+                    self._fill(o, o.remaining, book.time, "cross")
+            self._advance(book.time)
+        if prev is not None:
+            r.inventory_pnl += r.position * (book.mid - self.mid)
+            self.mid = book.mid
+        if self.pending is None:
+            self.pending = (book.time + self.latency_ms, self.quoter(book, r.position, self.params), book)
+            self._activate_due(book.time)
+        self.prev = book
+        r.last_mid = self.mid
+        return r.fills[before:]
+
+
+def add_markouts(res: Result, books: list[Book], horizons: tuple[int, ...], max_book_gap_ms: int = MAX_BOOK_GAP_MS) -> None:
+    """約定から N 秒後のミッドで測り直す。約定した瞬間の取り分より小さくなった分が逆選択。
+    books は時刻順で、約定より後のぶんまで入っていること"""
+    times = [b.time for b in books]
+    weight = sum(f.size * f.px for f in res.fills)
+    res.edge_bps = sum(f.side * (f.mid - f.px) * f.size for f in res.fills) / weight * 10_000 if weight else 0.0
+    res.markouts = {}
+    for h in horizons:
+        num = den = 0.0
+        n = 0
+        for f in res.fills:
+            target = f.time + h * 1000
+            i = bisect.bisect_left(times, target)  # N 秒たった後の最初の気配 (N 秒より手前では測らない)
+            if i == len(books) or books[i].time - target > max_book_gap_ms:
+                continue  # 記録がそこまで無い、または切れ目の中
+            num += f.side * (books[i].mid - f.px) * f.size
+            den += f.size * f.px
+            n += 1
+        if den:
+            res.markouts[h] = (num / den * 10_000, n)
+
+
 def simulate(
     books: list[Book],
     trades: list[Trade],
@@ -135,143 +312,17 @@ def simulate(
     cross_fills: bool = True,
 ) -> Result:
     """books は時刻順。trades の順は問わない。仮定はモジュールの docstring を参照"""
-    res = Result(books=len(books))
-    if not books:
-        return res
+    sim = Sim(quoter, params, sz_decimals=sz_decimals, maker_rate=maker_rate, latency_ms=latency_ms,
+              max_book_gap_ms=max_book_gap_ms, cross_fills=cross_fills)
     trades = sorted(trades, key=trade_order)
-    live: dict[int, Optional[Order]] = {BUY: None, SELL: None}
-    pending: Optional[tuple[int, Quote, Book]] = None  # (板に載る時刻, 出したい指値, 決めたときの気配)
-    pos = cash = fees = 0.0
-    area = abs_area = 0.0  # 在庫 x 時間
-    clock = books[0].time
-    mid = books[0].mid  # 直前の気配のミッド
-
-    def advance(t: int) -> None:
-        nonlocal clock, area, abs_area
-        area += pos * (t - clock)
-        abs_area += abs(pos) * (t - clock)
-        res.observed_ms += t - clock
-        clock = t
-
-    def fill(o: Order, size: float, t: int, kind: str) -> None:
-        nonlocal pos, cash, fees
-        if size <= 0:
-            return
-        advance(max(t, clock))
-        o.remaining = round(o.remaining - size, 9)
-        pos = round(pos + o.side * size, 9)
-        cash -= o.side * size * o.px
-        fees += maker_rate * size * o.px
-        res.spread_pnl += o.side * (mid - o.px) * size
-        res.fills.append(Fill(t, o.side, o.px, size, mid, kind))
-        res.max_abs_position = max(res.max_abs_position, abs(pos))
-        res.max_abs_position_usd = max(res.max_abs_position_usd, abs(pos) * mid)
-
-    def normalize(side: int, px: Optional[float], size: float, book: Book) -> Optional[tuple[float, float]]:
-        if px is None or px <= 0:
-            return None
-        nd = price_decimals(px, sz_decimals)
-        px = round_down(px, nd) if side == BUY else round_up(px, nd)
-        size = round_down(size, sz_decimals)
-        if px <= 0 or px * size < MIN_NOTIONAL_USD:
-            res.too_small += 1
-            return None
-        if (side == BUY and px >= book.best_ask) or (side == SELL and px <= book.best_bid):
-            res.rejected += 1
-            return None
-        return px, size
-
-    def activate(quote: Quote, book: Book) -> None:
-        for side, want in ((BUY, normalize(BUY, quote.bid, quote.bid_size, book)),
-                           (SELL, normalize(SELL, quote.ask, quote.ask_size, book))):
-            cur = live[side]
-            if cur and cur.remaining > 0 and want and want[0] == cur.px:
-                continue  # 値段が同じなら置いたまま (列の位置を保つ)
-            if cur and cur.remaining > 0:
-                res.canceled += 1
-            live[side] = None
-            if want:
-                live[side] = Order(side, want[0], want[1], queue_ahead(book, side, want[0]))
-                res.placed += 1
-
-    def activate_due(t: int) -> None:
-        nonlocal pending
-        if pending and pending[0] <= t:
-            activate(pending[1], pending[2])
-            pending = None
-
-    def match(tr: Trade) -> None:
-        o = live[BUY] if tr.side == "A" else live[SELL]
-        if any(live.values()):
-            res.market_volume_usd += tr.px * tr.sz
-        if not o or o.remaining <= 0:
-            return
-        if (tr.px - o.px) * o.side < 0:  # (a) 自分の値段を抜けた
-            o.queue = 0.0
-            fill(o, min(o.remaining, tr.sz), tr.time, "through")
-        elif tr.px == o.px:  # (b) 自分の値段ちょうど。まず前の列が消化される
-            eaten = min(o.queue, tr.sz)
-            o.queue -= eaten
-            fill(o, min(o.remaining, tr.sz - eaten), tr.time, "queue")
-
     ti = 0
-    while ti < len(trades) and trades[ti].time <= books[0].time:
-        ti += 1  # 最初の気配より前の約定は、当てる指値が無い
     for k, book in enumerate(books):
-        if k > 0 and book.time - books[k - 1].time > max_book_gap_ms:
-            # 記録の切れ目。見えない間のことは判定できないので、指値は前の気配の時点で取り下げたことにする
-            res.breaks += 1
-            res.canceled += sum(1 for o in live.values() if o and o.remaining > 0)
-            live[BUY] = live[SELL] = None
-            pending = None
-            while ti < len(trades) and trades[ti].time <= book.time:
-                ti += 1
-            clock = book.time
-        elif k > 0:
-            while ti < len(trades) and trades[ti].time <= book.time:
-                activate_due(trades[ti].time)
-                match(trades[ti])
-                ti += 1
-            activate_due(book.time)
-            for o in (live[BUY], live[SELL]):  # (c) 値段が自分の指値を抜けていたら約定
-                if cross_fills and o and o.remaining > 0 and (
-                    (o.side == BUY and book.best_ask <= o.px) or (o.side == SELL and book.best_bid >= o.px)
-                ):
-                    fill(o, o.remaining, book.time, "cross")
-            advance(book.time)
-        if k > 0:
-            res.inventory_pnl += pos * (book.mid - mid)
-            mid = book.mid
-        if pending is None:
-            pending = (book.time + latency_ms, quoter(book, pos, params), book)
-            activate_due(book.time)
-
-    res.position, res.last_mid = pos, mid
-    res.fee_pnl = -fees
-    res.total_pnl = cash + pos * mid - fees
-    if res.observed_ms:
-        res.avg_position, res.avg_abs_position = area / res.observed_ms, abs_area / res.observed_ms
-
-    # 約定から N 秒後のミッドで測り直す。約定した瞬間の取り分より小さくなった分が逆選択
-    times = [b.time for b in books]
-    weight = sum(f.size * f.px for f in res.fills)
-    if weight:
-        res.edge_bps = sum(f.side * (f.mid - f.px) / f.px * 10_000 * f.size * f.px for f in res.fills) / weight
-    for h in horizons:
-        num = den = 0.0
-        n = 0
-        for f in res.fills:
-            target = f.time + h * 1000
-            i = bisect.bisect_left(times, target)  # N 秒たった後の最初の気配 (N 秒より手前では測らない)
-            if i == len(books) or books[i].time - target > max_book_gap_ms:
-                continue  # 記録がそこまで無い、または切れ目の中
-            later = books[i]
-            num += f.side * (later.mid - f.px) / f.px * 10_000 * f.size * f.px
-            den += f.size * f.px
-            n += 1
-        if den:
-            res.markouts[h] = (num / den, n)
-    return res
+        start = ti
+        while ti < len(trades) and trades[ti].time <= book.time:
+            ti += 1
+        sim.step(book, trades[start:ti] if k > 0 else [])
+    add_markouts(sim.res, books, horizons, max_book_gap_ms)
+    return sim.res
 
 
 def format_result(
@@ -310,7 +361,7 @@ def format_result(
     lines.append(f"  在庫の評価損益       {res.inventory_pnl:+10.4f}   (残った在庫は最後のミッド {res.last_mid:g} で評価)")
     lines.append("  ファンディング          未計上")
     parts = res.spread_pnl + res.fee_pnl + res.inventory_pnl
-    lines.append(f"  合計                 {res.total_pnl:+10.4f}   (内訳の和との差 {res.total_pnl - parts:+.6f})")
+    lines.append(f"  合計                 {res.total_pnl:+10.4f}   (内訳の和との差 {round(res.total_pnl - parts, 6) + 0.0:+.6f})")
     if hours > 0:
         lines.append(f"  1 時間あたり         {res.total_pnl / hours:+10.4f}")
     if res.volume_usd:

@@ -1,5 +1,6 @@
 import json
 import random
+import re
 
 import pytest
 
@@ -374,3 +375,169 @@ async def test_report_summarises_market(tmp_path):
     assert "記録した 10 件" in report  # 最後の気配より後の約定は数えない
     assert "取りこぼしの可能性  1 回" in report
     assert build_report(MmStore(tmp_path / "empty.sqlite")) == "(まだ記録がありません)"
+
+
+# ---------------------------------------------------------------- 実況の paper
+
+from tbf.mm.__main__ import main as mm_main  # noqa: E402
+from tbf.mm.paper import Paper, build_paper_report, load_run, run_result, run_span  # noqa: E402
+from tbf.mm.quoter import QUOTERS  # noqa: E402
+
+PAPER_PARAMS = {**BASELINE_PARAMS, "half_spread_bps": 2.0}
+
+
+async def run_paper(tmp_path, seed, cycles, store=None, **kw):
+    """乱数の相場でポーリングを回す。気配は約定より細かく取り、ときどき 10 件を超える約定を出す"""
+    rng = random.Random(seed)
+    hl = FakeHyperliquid()
+    hl.time = 1_700_000_000_000 + seed * 100_000_000
+    store = store or MmStore(tmp_path / "mm.sqlite")
+    rec = Recorder(hl, store, ["INJ"], clock=lambda: hl.time + 300, log=lambda m: None)
+    await rec.setup()
+    paper = Paper(store, ["INJ"], "baseline", PAPER_PARAMS, maker_rate=0.00015, latency_ms=250,
+                  clock=lambda: hl.time + 300, log=lambda m: None, **kw)
+    rec.on_book, rec.on_trades = paper.on_book, paper.on_trades
+    bid = 5.8908
+    for _ in range(cycles):
+        for _ in range(rng.randint(2, 5)):
+            bid = round(bid + rng.choice([-0.0025, -0.0004, 0, 0, 0.0004, 0.0025]), 4)
+            hl.books["INJ"] = (bid, round(bid + 0.0021, 4))
+            await rec.poll_books()
+            hl.time += rng.randint(300, 2500)
+            for _ in range(rng.choice([0, 0, 1, 2, 4])):
+                side = rng.choice("AB")
+                px = round(bid + (0.0021 if side == "B" else 0) + rng.choice([-0.0015, -0.0008, 0, 0.0008, 0.0015]), 4)
+                hl.trade("INJ", 1, side=side, px=px)
+        if rng.random() < 0.1:
+            hl.trade("INJ", 14, side="A", px=round(bid - 0.001, 4))  # 10 件しか返らないので一部は見えない
+        await rec.poll_trades()
+    hl.books["INJ"] = (round(bid + 0.0004, 4), round(bid + 0.0025, 4))
+    await rec.poll_books()  # この後に約定のポーリングが無いので、この気配は確定しないまま止まる
+    paper.stop()
+    return store, paper
+
+
+def fill_keys(fills):
+    return [(f.time, f.side, f.px, f.size, f.kind, f.mid) for f in fills]
+
+
+async def test_paper_matches_replay_of_its_own_recording(tmp_path, capsys):
+    store, paper = await run_paper(tmp_path, seed=1, cycles=150)
+    live = run_result(store, paper.run, "INJ")
+    first, last = run_span(store, paper.run, "INJ")
+    books = store.books("INJ", first, last)
+    assert len(books) > 300 and len(store.books("INJ")) > len(books)  # 最後の数件はまだ確定していない
+    replayed = simulate(books, store.trades("INJ", first, last), baseline, PAPER_PARAMS, sz_decimals=1, latency_ms=250)
+
+    assert len(live.fills) > 20 and {f.kind for f in live.fills} == {"through", "queue", "cross"}
+    assert fill_keys(live.fills) == fill_keys(replayed.fills)
+    for k in ("spread_pnl", "inventory_pnl", "fee_pnl", "total_pnl", "position", "max_abs_position", "avg_abs_position",
+              "market_volume_usd", "placed", "canceled", "observed_ms", "books"):
+        assert getattr(live, k) == pytest.approx(getattr(replayed, k), abs=1e-9), k
+    assert live.total_pnl == pytest.approx(live.spread_pnl + live.fee_pnl + live.inventory_pnl, abs=1e-9)
+    assert store.query("SELECT COUNT(*) FROM gaps")[0][0] > 0  # 取りこぼしがあっても、同じ記録なら同じ結果
+    acct = store.query("SELECT * FROM paper_account WHERE run = ? ORDER BY minute DESC LIMIT 1", (paper.run,))[0]
+    assert (acct["late_trades"], acct["late_books"]) == (0, 0)
+    assert acct["equity"] == pytest.approx(live.total_pnl) and acct["position"] == live.position
+    # 約定ごとの手数料の和が口座の手数料と合う
+    assert store.query("SELECT SUM(fee) FROM paper_fills")[0][0] == pytest.approx(acct["fees"])
+
+    # コマンドでも同じ突き合わせができる
+    assert await mm_main(["replay", "--db", str(tmp_path / "mm.sqlite"), "--run", str(paper.run)]) == 0
+    assert f"paper run {paper.run} との突き合わせ: 一致" in capsys.readouterr().out
+
+
+async def test_paper_report_breaks_down_by_day_and_hour(tmp_path):
+    store, paper = await run_paper(tmp_path, seed=2, cycles=120)
+    live = run_result(store, paper.run, "INJ")
+    text = build_paper_report(store, taker_rate=0.00045)
+    assert f"== paper run {paper.run}  INJ  クォーター baseline  half_spread_bps=2" in text
+    assert "== paper INJ" in text and "ファンディング          未計上" in text and "内訳の和との差 +0.000000" in text
+    assert "(c) 気配が抜けていた" in text and "秒後" in text
+    # 日ごと・時間帯ごとの損益を足すと合計になる
+    day = [l.split() for l in text.split("日ごと (UTC)")[1].split("時間帯ごと")[0].splitlines()[1:] if l.strip()]
+    hour = [l.split() for l in text.split("時間帯ごと (UTC の時)")[1].splitlines()[1:] if re.match(r"\s+\d\d 時", l)]
+    assert sum(float(r[1]) for r in day) == pytest.approx(live.total_pnl, abs=0.002 * len(day))
+    assert sum(float(r[2]) for r in hour) == pytest.approx(live.total_pnl, abs=0.002 * len(hour))
+    assert sum(int(r[2]) for r in day) == sum(int(r[3]) for r in hour) == len(live.fills)
+    assert "== paper INJ" not in build_paper_report(store, taker_rate=0.00045, brief=True)  # Webhook 用は短い
+
+    # 末尾の一部だけを見ても内訳の足し算は合う。始点の在庫は始点のミッドで評価し直す
+    mid_time = live.fills[len(live.fills) // 2].time
+    part = run_result(store, paper.run, "INJ", since=mid_time)
+    assert 0 < len(part.fills) < len(live.fills)
+    assert part.total_pnl == pytest.approx(part.spread_pnl + part.fee_pnl + part.inventory_pnl, abs=1e-9)
+    assert part.position == live.position
+    windowed = build_paper_report(store, hours=(run_span(store, paper.run, "INJ")[1] - mid_time) / 3_600_000, taker_rate=0.00045)
+    day = [l.split() for l in windowed.split("日ごと (UTC)")[1].split("時間帯ごと")[0].splitlines()[1:] if l.strip()]
+    assert sum(int(r[2]) for r in day) == len(part.fills)  # 上の表と日ごとの表で、数える約定が同じ
+    assert sum(float(r[1]) for r in day) == pytest.approx(part.total_pnl, abs=0.002 * len(day))
+    assert build_paper_report(MmStore(tmp_path / "none.sqlite"), taker_rate=0.00045) == "(paper の run がありません)"
+
+
+async def test_paper_restart_is_a_new_run_from_zero(tmp_path):
+    store, first = await run_paper(tmp_path, seed=3, cycles=60)
+    before = run_result(store, first.run, "INJ")
+    assert before.position != 0 and load_run(store, first.run).stopped is not None
+    books_before = len(store.books("INJ"))
+    store, second = await run_paper(tmp_path, seed=4, cycles=60, store=store, cross_fills=False)
+    assert second.run == first.run + 1
+    assert len(store.books("INJ")) > books_before  # 記録は同じ sqlite の続きに足される
+    # 新しい run は在庫 0 から。前の run の成績は変わらない
+    after = run_result(store, second.run, "INJ")
+    replayed = simulate(store.books("INJ", *run_span(store, second.run, "INJ")), store.trades("INJ", *run_span(store, second.run, "INJ")),
+                        baseline, PAPER_PARAMS, sz_decimals=1, latency_ms=250, cross_fills=False)
+    assert fill_keys(after.fills) == fill_keys(replayed.fills) and after.total_pnl == pytest.approx(replayed.total_pnl)
+    assert fill_keys(run_result(store, first.run, "INJ").fills) == fill_keys(before.fills)
+    assert load_run(store).id == second.run and load_run(store).cross_fills is False  # 設定は run ごとに残る
+    assert "ほかに 1 個の run" in build_paper_report(store, taker_rate=0.00045)
+
+
+def test_paper_waits_for_trades_and_counts_what_arrives_too_late(tmp_path):
+    store = MmStore(tmp_path / "mm.sqlite")
+    store.set_coin("INJ", 1, 0)
+    QUOTERS["test_fixed"] = (fixed(bid=99.9), {})
+    try:
+        paper = Paper(store, ["INJ"], "test_fixed", {}, maker_rate=0.0, latency_ms=0, log=lambda m: None)
+    finally:
+        del QUOTERS["test_fixed"]
+    b = flat_books(n=4, step=2 * SEC)
+    paper.on_book("INJ", b[0], recv=500)
+    paper.on_book("INJ", b[1], recv=2500)
+    assert "INJ" not in paper.sims  # 約定のポーリングがまだなので、気配は確定しない (クォーターも呼ばれない)
+    paper.on_book("INJ", b[2], recv=4500)
+    # 4000 に取りにいった約定のポーリング。それより前に受け取った気配 0, 1 だけが確定する
+    paper.on_trades("INJ", [Trade(1 * SEC, "A", 99.8, 3), Trade(3 * SEC, "A", 99.8, 4)], started=4000)
+    assert paper.sims["INJ"].prev.time == 2 * SEC
+    assert [(f.time, f.size) for f in paper.sims["INJ"].res.fills] == [(1 * SEC, 3)]  # 3 秒の約定は気配 2 を待つ
+    # 気配 1 (2 秒) より前の時刻の約定が後から届いた。もう通り過ぎているので使えず、数だけ残す
+    paper.on_book("INJ", b[3], recv=6500)
+    paper.on_trades("INJ", [Trade(1500, "A", 99.8, 5)], started=7000)
+    assert [(f.time, f.size) for f in paper.sims["INJ"].res.fills] == [(1 * SEC, 3), (3 * SEC, 4)]
+    assert paper.late_trades["INJ"] == 1
+    acct = store.query("SELECT late_trades, position FROM paper_account")[0]
+    assert (acct["late_trades"], acct["position"]) == (1, 7)
+
+
+async def test_paper_failure_stops_paper_but_not_recording(tmp_path):
+    def boom(book, inventory, params):
+        raise RuntimeError("quoter bug")
+
+    hl = FakeHyperliquid()
+    store = MmStore(tmp_path / "mm.sqlite")
+    logs = []
+    rec = Recorder(hl, store, ["INJ"], clock=lambda: hl.time + 300, log=logs.append)
+    await rec.setup()
+    QUOTERS["test_boom"] = (boom, {})
+    try:
+        paper = Paper(store, ["INJ"], "test_boom", {}, maker_rate=0.0, latency_ms=0, clock=lambda: hl.time, log=logs.append)
+    finally:
+        del QUOTERS["test_boom"]
+    rec.on_book, rec.on_trades = paper.on_book, paper.on_trades
+    for _ in range(3):
+        await rec.poll_books()
+        hl.trade("INJ", 2)
+        await rec.poll_trades()
+    assert "INJ" in paper.broken and any("paper を止めました" in m for m in logs)
+    assert len(store.books("INJ")) == 3 and len(store.trades("INJ")) == 6  # 記録は欠けない
+    assert store.query("SELECT COUNT(*) FROM polls WHERE error IS NOT NULL")[0][0] == 0

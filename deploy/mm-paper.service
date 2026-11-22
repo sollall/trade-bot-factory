@@ -1,0 +1,47 @@
+# /etc/systemd/system/mm-paper.service の雛形 (手で配置する。手順は docs/mm.md。deploy/setup-server.sh は配置しない)
+# マーケットメイクの実況の paper。発注はしない。鍵も要らない (公開 API の読み取りだけ)
+[Unit]
+Description=trade-bot-factory market making (live paper, no orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mm
+Group=mm
+WorkingDirectory=/opt/trade-bot-factory
+# MM_COINS (必須。例: MON,INJ)、MM_ARGS (任意。例: --param half_spread_bps=4)、WEBHOOK_URL (任意) をここに書く (root だけ読める)。
+# MM_COINS が無いと起動に失敗して 10 秒ごとに再試行を繰り返す (journalctl に理由が出る)。
+# 再起動するたびに新しい run になり、在庫は 0 から始まる (記録は同じ sqlite の続きに足される)
+EnvironmentFile=-/etc/mm/env
+ExecStart=/usr/bin/python3 -m tbf.mm paper --coins ${MM_COINS} --db /var/lib/mm/mm.sqlite $MM_ARGS
+Restart=always
+RestartSec=10
+
+# ---- サンドボックス: 乗っ取られても被害を広げない ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+StateDirectory=mm
+ReadWritePaths=/var/lib/mm
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

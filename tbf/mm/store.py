@@ -8,6 +8,8 @@ from pathlib import Path
 
 from tbf.mm.book import Book, Trade, trade_order
 
+FOREVER = 1 << 62
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS coins (coin TEXT PRIMARY KEY, sz_decimals INTEGER NOT NULL, updated INTEGER NOT NULL);
 -- time は取引所の時刻、recv は手元で受け取った時刻 (どちらも ms)。bids / asks は [[値段, 数量], ...] の JSON
@@ -31,6 +33,29 @@ CREATE TABLE IF NOT EXISTS polls (
   time INTEGER NOT NULL, coin TEXT NOT NULL, kind TEXT NOT NULL, latency_ms REAL, error TEXT, new_rows INTEGER
 );
 CREATE INDEX IF NOT EXISTS polls_time ON polls (time);
+
+-- ---- 実況の paper (tbf/mm/paper.py)。1 回の起動が 1 つの run。設定の違う実行を混ぜないため
+CREATE TABLE IF NOT EXISTS paper_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, started INTEGER NOT NULL, stopped INTEGER,
+  coins TEXT NOT NULL, quoter TEXT NOT NULL, params TEXT NOT NULL, maker_rate REAL NOT NULL,
+  latency_ms INTEGER NOT NULL, cross_fills INTEGER NOT NULL,
+  interval REAL NOT NULL, trades_interval REAL NOT NULL, depth INTEGER NOT NULL
+);
+-- 疑似約定。side: 1 = 買い、-1 = 売り。kind: through = (a)、queue = (b)、cross = (c)。mid は約定の直前の気配のミッド
+CREATE TABLE IF NOT EXISTS paper_fills (
+  run INTEGER NOT NULL, coin TEXT NOT NULL, time INTEGER NOT NULL, side INTEGER NOT NULL,
+  px REAL NOT NULL, size REAL NOT NULL, kind TEXT NOT NULL, fee REAL NOT NULL, mid REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS paper_fills_run ON paper_fills (run, coin, time);
+-- 口座のスナップショット。1 分に 1 行 (その分の最後の状態で上書き)。time は最後に処理した気配の時刻、
+-- first_book はこの run が最初に処理した気配の時刻。equity = cash + position * mid - fees (0 から始まる損益)。
+-- late_* は replay と食い違いうる出来事の回数。stats はシミュレータの成績を丸ごと (JSON)
+CREATE TABLE IF NOT EXISTS paper_account (
+  run INTEGER NOT NULL, coin TEXT NOT NULL, minute INTEGER NOT NULL, time INTEGER NOT NULL, first_book INTEGER NOT NULL,
+  position REAL NOT NULL, cash REAL NOT NULL, fees REAL NOT NULL, mid REAL NOT NULL, equity REAL NOT NULL,
+  late_trades INTEGER NOT NULL, late_books INTEGER NOT NULL, stats TEXT NOT NULL,
+  PRIMARY KEY (run, coin, minute)
+);
 """
 
 
@@ -55,14 +80,14 @@ class MmStore:
         )
         return cur.rowcount
 
-    def add_trades(self, coin: str, trades: list[Trade], recv: int) -> int:
-        """既に記録した約定 (時刻と tid が同じ) は足さない。新しく足した件数を返す"""
-        new = 0
-        for t in trades:
-            new += self.conn.execute(
+    def add_trades(self, coin: str, trades: list[Trade], recv: int) -> list[Trade]:
+        """既に記録した約定 (時刻と tid が同じ) は足さない。新しく足したものを返す"""
+        return [
+            t for t in trades
+            if self.conn.execute(
                 "INSERT OR IGNORE INTO trades VALUES (?,?,?,?,?,?,?)", (coin, t.time, t.tid, t.side, t.px, t.sz, recv)
             ).rowcount
-        return new
+        ]
 
     def add_gap(self, coin: str, time: int, after: int, before: int) -> None:
         self.conn.execute("INSERT INTO gaps VALUES (?,?,?,?)", (coin, time, after, before))
@@ -91,14 +116,16 @@ class MmStore:
             return self.query("SELECT COALESCE(MAX(time), 0) FROM books")[0][0]
         return self.query("SELECT COALESCE(MAX(time), 0) FROM books WHERE coin = ?", (coin,))[0][0]
 
-    def books(self, coin: str, since: int = 0) -> list[Book]:
+    def books(self, coin: str, since: int = 0, until: int = FOREVER) -> list[Book]:
         return [
             Book(r["time"], tuple((p, s) for p, s in json.loads(r["bids"])), tuple((p, s) for p, s in json.loads(r["asks"])))
-            for r in self.query("SELECT time, bids, asks FROM books WHERE coin = ? AND time >= ? ORDER BY time", (coin, since))
+            for r in self.query(
+                "SELECT time, bids, asks FROM books WHERE coin = ? AND time >= ? AND time <= ? ORDER BY time", (coin, since, until))
         ]
 
-    def trades(self, coin: str, since: int = 0) -> list[Trade]:
-        rows = self.query("SELECT time, side, px, sz, tid FROM trades WHERE coin = ? AND time >= ?", (coin, since))
+    def trades(self, coin: str, since: int = 0, until: int = FOREVER) -> list[Trade]:
+        rows = self.query(
+            "SELECT time, side, px, sz, tid FROM trades WHERE coin = ? AND time >= ? AND time <= ?", (coin, since, until))
         return sorted((Trade(r["time"], r["side"], r["px"], r["sz"], r["tid"]) for r in rows), key=trade_order)
 
     def recent_trade_keys(self, coin: str, limit: int = 200) -> list[tuple[int, int]]:
