@@ -30,7 +30,7 @@
 | マーケットデータ | `tbf/market/` | 取引所ごとの価格・足・ファンディング (Binance 現物 / Hyperliquid 先物) |
 | バックテスト | `tbf/backtest/` | 足 i の確定で判断し足 i+1 の始値で約定 (先読みなし)。ファンディング・清算・本番と同じリスク停止も再現 |
 | Worker 本体 | `tbf/worker/` | cron 処理・D1 永続化・ブローカー (paper/live)・通知・ダッシュボード・API |
-| マーケットメイクの準備 | `tbf/mm/` | Hyperliquid の気配と約定の記録 (`record`)、市場の様子の集計 (`report`)、記録の上で指値の出し方を試す再生 (`replay`)、記録しながら疑似的に約定を付ける実況の paper (`paper` / `paper-report`)。売買はしない。Worker には載せない → [docs/mm.md](docs/mm.md) |
+| マーケットメイクの準備 | `tbf/mm/` | Hyperliquid・GMO コイン・bitbank の気配と約定の記録 (`record`)、市場の様子の集計 (`report`)、記録の上で指値の出し方を試す再生 (`replay`)、記録しながら疑似的に約定を付ける実況の paper (`paper` / `paper-report`)。売買はしない。Worker には載せない → [docs/mm.md](docs/mm.md) |
 | Cloudflare 入口 | `worker/entry.py` | D1 / fetch / Request / Response を `tbf.worker` に橋渡しするだけの薄い層 |
 | ビルド | `scripts/build_worker.py` | `tbf/`・`bots/`・`entry.py` を `.build/` に集め、bot 一覧 `bot_registry.py` を生成 |
 

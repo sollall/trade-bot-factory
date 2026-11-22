@@ -33,7 +33,8 @@ class Book:
 
 @dataclass(frozen=True)
 class Trade:
-    """市場で成立した約定。side は仕掛けた側: "B" = 買い手主導 (売り板を食った)、"A" = 売り手主導"""
+    """市場で成立した約定。side は仕掛けた側: "B" = 買い手主導 (売り板を食った)、"A" = 売り手主導、
+    "U" = 不明 (GMO コインだけ。API が仕掛けた側を返さない。tbf/mm/venues.py)"""
 
     time: int
     side: str
@@ -58,6 +59,15 @@ def price_decimals(px: float, sz_decimals: int) -> int:
     if px <= 0:
         raise ValueError(f"値段が正でない: {px}")
     return max(0, min(4 - math.floor(math.log10(px)), 6 - sz_decimals))
+
+
+def floor_to(x: float, step: float, decimals: int) -> float:
+    """step の倍数に切り下げる (decimals は step の小数の桁数)。値段の刻みが決まっている会場 (GMO、bitbank) 用"""
+    return round(math.floor(x / step + 1e-9) * step, decimals)
+
+
+def ceil_to(x: float, step: float, decimals: int) -> float:
+    return round(math.ceil(x / step - 1e-9) * step, decimals)
 
 
 def round_down(px: float, decimals: int) -> float:

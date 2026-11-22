@@ -25,6 +25,7 @@
       cross_fills=False (--no-cross-fill) で外せる。外したほうは甘い側なので、2 つの間に実際があると読む。
   - 値段が同じなら指値は置いたままで、列の位置も保つ。値段が変わったら取り消して出し直し、列の最後尾。
   - 相手の気配に当たる値段 (買い >= 最良売り) は出さない (ポストオンリーで弾かれる扱い)。
+  - 仕掛けた側が分からない約定 (GMO。side が "U") は、値段が届いた側の指値に (a)(b) を当てる。
 
 損益の内訳 (足すと合計になる)
   - スプレッドの取り分: 約定ごとの (その直前の気配のミッド - 約定値段) x 数量 (売りは符号が逆)
@@ -43,21 +44,26 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
 
-from tbf.mm.book import Book, Trade, price_decimals, round_down, round_up, trade_order
+from tbf.mm.book import Book, Trade, ceil_to, floor_to, price_decimals, round_down, round_up, trade_order
 from tbf.mm.quoter import HISTORY_SEC, MAX_HISTORY, Context, Quote, Quoter
+from tbf.mm.venues import (
+    HYPERLIQUID_MAKER_RATE,
+    HYPERLIQUID_MIN_NOTIONAL,
+    Instrument,
+    hyperliquid_instrument,
+    step_decimals,
+)
 
 BUY, SELL = 1, -1
 
-#: メイカー手数料率の既定 (+0.015%)。Hyperliquid の無期限・基本ティア。
-#: 2026-11-22 に公開 API の {"type":"userFees"} が返す料率表 (feeSchedule.add = 0.00015) で確かめた。
-#: 公式ドキュメントの手数料ページでは **未確認** (この環境から届かない)。出来高や
-#: ステーキングの割引、紹介の割引は入れていない。
-DEFAULT_MAKER_RATE = 0.00015
+#: Hyperliquid のメイカー手数料率 (前からの名前。値と由来は tbf/mm/venues.py)。
+#: ほかの会場は、会場の API が返す銘柄ごとの値を使う (Instrument.maker_rate)
+DEFAULT_MAKER_RATE = HYPERLIQUID_MAKER_RATE
 #: 指値が板に載るまでの遅れの既定。**仮定**。手元から info を 1 回叩く往復が 250〜300ms だったのでその程度に
 #: 置いただけで、発注の経路で測った値ではない
 DEFAULT_LATENCY_MS = 250
-#: 1 注文の最小の代金 (USD)。これ未満は出さない。Hyperliquid は 10 ドルのはずだが **未確認**
-MIN_NOTIONAL_USD = 10.0
+#: Hyperliquid の 1 注文の最小の代金 (前からの名前)。会場ごとの値は Instrument.min_notional / min_size
+MIN_NOTIONAL_USD = HYPERLIQUID_MIN_NOTIONAL
 #: 気配がこれ以上途切れたら記録の切れ目とみなし、指値をいったん全部取り下げる (見えない間は約定を判定できない)
 MAX_BOOK_GAP_MS = 60_000
 
@@ -156,14 +162,24 @@ class Sim:
         quoter: Quoter,
         params: dict[str, float],
         *,
-        sz_decimals: int,
-        maker_rate: float = DEFAULT_MAKER_RATE,
+        sz_decimals: Optional[int] = None,
+        maker_rate: Optional[float] = None,
         latency_ms: int = DEFAULT_LATENCY_MS,
         max_book_gap_ms: int = MAX_BOOK_GAP_MS,
         cross_fills: bool = True,
+        instrument: Optional[Instrument] = None,
     ) -> None:
-        self.quoter, self.params, self.sz_decimals = quoter, params, sz_decimals
-        self.maker_rate, self.latency_ms = maker_rate, latency_ms
+        # 銘柄の決まりごと (刻み・最小数量・手数料)。sz_decimals だけ渡せば Hyperliquid の銘柄として扱う
+        if instrument is None:
+            if sz_decimals is None:
+                raise ValueError("instrument か sz_decimals のどちらかが要る")
+            instrument = hyperliquid_instrument("", sz_decimals)
+        self.inst = instrument
+        self._tick_nd = step_decimals(instrument.tick) if instrument.tick else 0
+        self._size_nd = step_decimals(instrument.size_step) if instrument.size_step else 0
+        self.quoter, self.params = quoter, params
+        self.maker_rate = instrument.maker_rate if maker_rate is None else maker_rate
+        self.latency_ms = latency_ms
         self.max_book_gap_ms, self.cross_fills = max_book_gap_ms, cross_fills
         self.res = Result()
         self.live: dict[int, Optional[Order]] = {BUY: None, SELL: None}
@@ -201,10 +217,17 @@ class Sim:
     def _normalize(self, side: int, px: Optional[float], size: float, book: Book) -> Optional[tuple[float, float]]:
         if px is None or px <= 0:
             return None
-        nd = price_decimals(px, self.sz_decimals)
-        px = round_down(px, nd) if side == BUY else round_up(px, nd)
-        size = round_down(size, self.sz_decimals)
-        if px <= 0 or px * size < MIN_NOTIONAL_USD:
+        inst = self.inst
+        # 買いは切り下げ、売りは切り上げ (どちらもミッドから遠い側)。刻みが粗い銘柄では、これで最良気配と
+        # 同じ値段に並ぶことがある。そのときは queue_ahead がその値段の数量を「前の列」として数える
+        if inst.tick is None:  # Hyperliquid: 値段の桁で刻みが変わる
+            nd = price_decimals(px, inst.sz_decimals)  # type: ignore[arg-type]
+            px = round_down(px, nd) if side == BUY else round_up(px, nd)
+            size = round_down(size, inst.sz_decimals)  # type: ignore[arg-type]
+        else:
+            px = floor_to(px, inst.tick, self._tick_nd) if side == BUY else ceil_to(px, inst.tick, self._tick_nd)
+            size = floor_to(size, inst.size_step, self._size_nd)
+        if px <= 0 or size <= 0 or size < inst.min_size or px * size < inst.min_notional:
             self.res.too_small += 1
             return None
         if (side == BUY and px >= book.best_ask) or (side == SELL and px <= book.best_bid):
@@ -230,7 +253,16 @@ class Sim:
                 self.res.placed += 1
 
     def _match(self, tr: Trade) -> None:
-        o = self.live[BUY] if tr.side == "A" else self.live[SELL]
+        if tr.side == "A":
+            o = self.live[BUY]
+        elif tr.side == "B":
+            o = self.live[SELL]
+        else:
+            # 仕掛けた側が分からない約定 (GMO)。値段が届いた側の指値に当てる: 自分の買い値以下で成立したなら
+            # 買い指値に、売り値以上なら売り指値に。買い値 < 売り値なので両方に当たることは無い。
+            # どちらが仕掛けたにせよ、自分の指値の値段かそれより不利な値段で市場が成立した、という事実だけを使う
+            bid, ask = self.live[BUY], self.live[SELL]
+            o = bid if bid and bid.remaining > 0 and tr.px <= bid.px else ask if ask and ask.remaining > 0 and tr.px >= ask.px else None
         if any(self.live.values()):
             self.res.market_volume_usd += tr.px * tr.sz
         if not o or o.remaining <= 0:
@@ -320,16 +352,17 @@ def simulate(
     quoter: Quoter,
     params: dict[str, float],
     *,
-    sz_decimals: int,
-    maker_rate: float = DEFAULT_MAKER_RATE,
+    sz_decimals: Optional[int] = None,
+    maker_rate: Optional[float] = None,
     latency_ms: int = DEFAULT_LATENCY_MS,
     horizons: tuple[int, ...] = (5, 30, 60),
     max_book_gap_ms: int = MAX_BOOK_GAP_MS,
     cross_fills: bool = True,
+    instrument: Optional[Instrument] = None,
 ) -> Result:
     """books は時刻順。trades の順は問わない。仮定はモジュールの docstring を参照"""
     sim = Sim(quoter, params, sz_decimals=sz_decimals, maker_rate=maker_rate, latency_ms=latency_ms,
-              max_book_gap_ms=max_book_gap_ms, cross_fills=cross_fills)
+              max_book_gap_ms=max_book_gap_ms, cross_fills=cross_fills, instrument=instrument)
     trades = sorted(trades, key=trade_order)
     ti = 0
     for k, book in enumerate(books):
@@ -343,8 +376,11 @@ def simulate(
 
 def format_result(
     coin: str, res: Result, params: dict[str, float], *, maker_rate: float, taker_rate: float, latency_ms: int,
-    trade_gaps: int, quoter: str = "baseline", cross_fills: bool = True,
+    trade_gaps: int, quoter: str = "baseline", cross_fills: bool = True, instrument: Optional[Instrument] = None,
 ) -> str:
+    """金額は銘柄の建値の通貨 (instrument.quote)。instrument を省くと Hyperliquid (USD)"""
+    sym = instrument.symbol if instrument else "$"
+    quote = instrument.quote if instrument else "USD"
     hours = res.observed_ms / 3_600_000
     lines = [f"== 再生 {coin}  クォーター {quoter}  " + " ".join(f"{k}={v:g}" for k, v in params.items())]
     lines.append(
@@ -353,16 +389,16 @@ def format_result(
     )
     traded = sum(f.px * f.size for f in res.fills if f.kind != "cross")
     share = traded / res.market_volume_usd * 100 if res.market_volume_usd else 0.0
-    lines.append(f"約定 {len(res.fills)} 件 (買 {res.count(BUY)} / 売 {res.count(SELL)})  代金 ${res.volume_usd:,.0f}")
+    lines.append(f"約定 {len(res.fills)} 件 (買 {res.count(BUY)} / 売 {res.count(SELL)})  代金 {sym}{res.volume_usd:,.0f}")
     for kind, label in (("through", "(a) 値段を抜けた    "), ("queue", "(b) 列を消化して    "), ("cross", "(c) 気配が抜けていた")):
         fs = [f for f in res.fills if f.kind == kind]
         usd = sum(f.px * f.size for f in fs)
-        line = f"  {label} {len(fs):>4} 件  ${usd:>9,.0f}"
+        line = f"  {label} {len(fs):>4} 件  {sym}{usd:>9,.0f}"
         if usd:
             line += f"  瞬間の取り分 {sum(f.side * (f.mid - f.px) * f.size for f in fs) / usd * 10_000:+6.2f} bps"
         lines.append(line)
     lines.append(
-        f"  (a)+(b) は、指値を出していた間の市場の約定代金 ${res.market_volume_usd:,.0f} の {share:.1f}%。"
+        f"  (a)+(b) は、指値を出していた間の市場の約定代金 {sym}{res.market_volume_usd:,.0f} の {share:.1f}%。"
         "(c) は記録にある約定ではないので、この割合に入らない"
     )
     if not cross_fills:
@@ -371,9 +407,9 @@ def format_result(
         f"指値: 出した {res.placed} 回  取り消した {res.canceled} 回  "
         f"相手の気配に当たるので出さず {res.rejected} 回  小さすぎて出さず {res.too_small} 回"
     )
-    lines.append("\n損益 (USD)")
+    lines.append(f"\n損益 ({quote})")
     lines.append(f"  スプレッドの取り分   {res.spread_pnl:+10.4f}")
-    lines.append(f"  手数料               {res.fee_pnl:+10.4f}")
+    lines.append(f"  手数料               {res.fee_pnl + 0.0:+10.4f}")
     lines.append(f"  在庫の評価損益       {res.inventory_pnl:+10.4f}   (残った在庫は最後のミッド {res.last_mid:g} で評価)")
     lines.append("  ファンディング          未計上")
     parts = res.spread_pnl + res.fee_pnl + res.inventory_pnl
@@ -391,11 +427,25 @@ def format_result(
         lines.append("  (N 秒後まで記録が続いている約定がありません)")
 
     lines.append("\n在庫")
-    lines.append(f"  最大      {res.max_abs_position:g} 枚 (${res.max_abs_position_usd:,.0f})")
+    lines.append(f"  最大      {res.max_abs_position:g} 枚 ({sym}{res.max_abs_position_usd:,.0f})")
     lines.append(f"  時間平均  {res.avg_position:+g} 枚 (絶対値の平均 {res.avg_abs_position:g} 枚)")
     close_cost = abs(res.position) * res.last_mid * taker_rate
     lines.append(
-        f"  最後      {res.position:+g} 枚 (${res.position * res.last_mid:+,.0f})  "
-        f"テイカーで閉じるなら手数料 ${close_cost:.4f} + スプレッドの半分が別にかかる (上の損益には未計上)"
+        f"  最後      {res.position:+g} 枚 ({sym}{res.position * res.last_mid:+,.0f})  "
+        f"テイカーで閉じるなら手数料 {sym}{close_cost:.4f} + スプレッドの半分が別にかかる (上の損益には未計上)"
     )
+    if instrument and not instrument.can_short:
+        # 現物は在庫が無いと売れないが、再生はそれを守らせていない。どれだけ頼っているかを出す
+        pos = res.position - sum(f.side * f.size for f in res.fills)
+        n = usd = 0.0
+        for f in res.fills:
+            if f.side == SELL and pos - f.size < -1e-9:
+                n += 1
+                usd += f.px * f.size
+            pos += f.side * f.size
+        lines.append(
+            f"\n※ 現物なので、実際には在庫が無いと売れない。この再生はそれを守らせていない (実際より甘い)。"
+            f"在庫を 0 より下に押し下げた売りが {n:.0f} 件 ({sym}{usd:,.0f}) 含まれる。"
+            "最初に在庫を持って始めれば出せるが、その在庫の値動きは別に負う"
+        )
     return "\n".join(lines)

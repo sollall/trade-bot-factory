@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sqlite3
 from pathlib import Path
 
 from tbf.mm.book import Book, Trade, trade_order
+from tbf.mm.venues import Instrument, hyperliquid_instrument
 
 FOREVER = 1 << 62
 
@@ -34,6 +36,11 @@ CREATE TABLE IF NOT EXISTS polls (
 );
 CREATE INDEX IF NOT EXISTS polls_time ON polls (time);
 
+-- ---- 会場。1 つの db には 1 つの会場だけを入れる (meta の venue)。meta が無い古い db は hyperliquid。
+-- instruments は銘柄の決まりごと (刻み・最小数量・手数料など。Instrument を JSON で)。無い銘柄は coins から hyperliquid として読む
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS instruments (coin TEXT PRIMARY KEY, spec TEXT NOT NULL, updated INTEGER NOT NULL);
+
 -- ---- 実況の paper (tbf/mm/paper.py)。1 回の起動が 1 つの run。設定の違う実行を混ぜないため
 CREATE TABLE IF NOT EXISTS paper_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, started INTEGER NOT NULL, stopped INTEGER,
@@ -56,6 +63,8 @@ CREATE TABLE IF NOT EXISTS paper_account (
   late_trades INTEGER NOT NULL, late_books INTEGER NOT NULL, stats TEXT NOT NULL,
   PRIMARY KEY (run, coin, minute)
 );
+-- run で使った銘柄ごとのメイカー手数料率 (会場の値をそのまま使うと銘柄で違う)。行が無い古い run は paper_runs.maker_rate
+CREATE TABLE IF NOT EXISTS paper_run_fees (run INTEGER NOT NULL, coin TEXT NOT NULL, maker_rate REAL NOT NULL, PRIMARY KEY (run, coin));
 """
 
 
@@ -70,6 +79,33 @@ class MmStore:
 
     def set_coin(self, coin: str, sz_decimals: int, now: int) -> None:
         self.conn.execute("INSERT OR REPLACE INTO coins VALUES (?,?,?)", (coin, sz_decimals, now))
+
+    def venue(self) -> str:
+        """この db の会場。会場を残す前に作った db は hyperliquid"""
+        rows = self.query("SELECT value FROM meta WHERE key = 'venue'")
+        return rows[0][0] if rows else "hyperliquid"
+
+    def claim_venue(self, venue: str) -> None:
+        """この db に venue の記録を足してよいか確かめ、会場を残す。違う会場の db なら ValueError"""
+        rows = self.query("SELECT value FROM meta WHERE key = 'venue'")
+        current = rows[0][0] if rows else ("hyperliquid" if self.query("SELECT 1 FROM books LIMIT 1") else None)
+        if current is not None and current != venue:
+            raise ValueError(
+                f"この db は {current} の記録です。{venue} の記録は別のファイルに取ってください (--db data/mm_{venue}.sqlite など)")
+        self.conn.execute("INSERT OR REPLACE INTO meta VALUES ('venue', ?)", (venue,))
+
+    def set_instrument(self, inst: Instrument, now: int) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO instruments VALUES (?,?,?)", (inst.coin, json.dumps(dataclasses.asdict(inst)), now))
+        if inst.sz_decimals is not None:
+            self.set_coin(inst.coin, inst.sz_decimals, now)  # 前の版のコードでも読めるように
+
+    def instrument(self, coin: str) -> Instrument | None:
+        rows = self.query("SELECT spec FROM instruments WHERE coin = ?", (coin,))
+        if rows:
+            return Instrument(**json.loads(rows[0][0]))
+        d = self.sz_decimals(coin)
+        return None if d is None else hyperliquid_instrument(coin, d)
 
     def add_book(self, coin: str, book: Book, recv: int) -> int:
         """同じ時刻の気配が既にあれば足さない。足した行数を返す"""

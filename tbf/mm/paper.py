@@ -29,6 +29,7 @@ from tbf.mm.book import Book, Trade
 from tbf.mm.quoter import QUOTERS
 from tbf.mm.replay import Fill, Result, Sim, add_markouts, format_result
 from tbf.mm.store import MmStore
+from tbf.mm.venues import Instrument
 
 _STATS_SKIP = ("fills", "markouts", "edge_bps")
 #: 窓 (--hours) で区切るとき、始点の値を引けば窓の中のぶんになる項目
@@ -50,6 +51,11 @@ class RunConfig:
     interval: float
     trades_interval: float
     depth: int
+    #: 銘柄ごとのメイカー手数料率 (会場の値を使うと銘柄で違う)。無い銘柄は maker_rate
+    maker_rates: dict = dataclasses.field(default_factory=dict)
+
+    def rate(self, coin: str) -> float:
+        return self.maker_rates.get(coin, self.maker_rate)
 
 
 def load_run(store: MmStore, run: Optional[int] = None) -> Optional[RunConfig]:
@@ -62,6 +68,7 @@ def load_run(store: MmStore, run: Optional[int] = None) -> Optional[RunConfig]:
     return RunConfig(
         r["id"], r["started"], r["stopped"], r["coins"].split(","), r["quoter"], json.loads(r["params"]),
         r["maker_rate"], r["latency_ms"], bool(r["cross_fills"]), r["interval"], r["trades_interval"], r["depth"],
+        {f["coin"]: f["maker_rate"] for f in store.query("SELECT coin, maker_rate FROM paper_run_fees WHERE run = ?", (r["id"],))},
     )
 
 
@@ -75,7 +82,7 @@ class Paper:
         quoter: str,
         params: dict[str, float],
         *,
-        maker_rate: float,
+        maker_rate: Optional[float] = None,
         latency_ms: int,
         cross_fills: bool = True,
         interval: float = 2.0,
@@ -85,10 +92,11 @@ class Paper:
         log: Callable[[str], None] = print,
     ) -> None:
         self.store, self.coins, self.log, self.clock = store, coins, log, clock
-        self.maker_rate = maker_rate
+        # maker_rate を省くと、銘柄ごとに会場の値 (記録を始めたときに API から取ったもの) を使う
+        self.rates = {c: self._instrument(c).maker_rate if maker_rate is None else maker_rate for c in coins}
         fn = QUOTERS[quoter][0]
         self._make = lambda coin: Sim(
-            fn, params, sz_decimals=self._decimals(coin), maker_rate=maker_rate,
+            fn, params, instrument=self._instrument(coin), maker_rate=self.rates[coin],
             latency_ms=latency_ms, cross_fills=cross_fills,
         )
         self.sims: dict[str, Sim] = {}
@@ -101,16 +109,17 @@ class Paper:
         self.run = store.conn.execute(
             "INSERT INTO paper_runs (started, coins, quoter, params, maker_rate, latency_ms, cross_fills, interval, trades_interval, depth)"
             " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (clock(), ",".join(coins), quoter, json.dumps(params), maker_rate, latency_ms, int(cross_fills),
+            (clock(), ",".join(coins), quoter, json.dumps(params), self.rates[coins[0]], latency_ms, int(cross_fills),
              interval, trades_interval, depth),
         ).lastrowid
+        store.conn.executemany("INSERT INTO paper_run_fees VALUES (?,?,?)", [(self.run, c, r) for c, r in self.rates.items()])
         store.commit()
 
-    def _decimals(self, coin: str) -> int:
-        d = self.store.sz_decimals(coin)
-        if d is None:
-            raise ValueError(f"{coin} の数量の小数桁が記録に無い (Recorder.setup を先に呼ぶ)")
-        return d
+    def _instrument(self, coin: str) -> Instrument:
+        inst = self.store.instrument(coin)
+        if inst is None:
+            raise ValueError(f"{coin} の銘柄の情報が記録に無い (Recorder.setup を先に呼ぶ)")
+        return inst
 
     def on_book(self, coin: str, book: Book, recv: int) -> None:
         if coin not in self.broken:
@@ -149,7 +158,7 @@ class Paper:
             for f in sim.step(book, batch):
                 self.store.conn.execute(
                     "INSERT INTO paper_fills VALUES (?,?,?,?,?,?,?,?,?)",
-                    (self.run, coin, f.time, f.side, f.px, f.size, f.kind, self.maker_rate * f.px * f.size, f.mid),
+                    (self.run, coin, f.time, f.side, f.px, f.size, f.kind, self.rates[coin] * f.px * f.size, f.mid),
                 )
         self._snapshot(coin)
 
@@ -248,12 +257,18 @@ def build_paper_report(
     spans = {c: run_span(store, cfg.id, c) for c in cfg.coins}
     end = max((s[1] for s in spans.values() if s), default=0)
     since = 0 if hours is None else end - int(hours * 3_600_000)
+    insts = {c: store.instrument(c) for c in cfg.coins}
+    first = next((i for i in insts.values() if i), None)
+    sym, quote = (first.symbol, first.quote) if first else ("$", "USD")
+    rates = {cfg.rate(c) for c in cfg.coins}
+    fee_text = (f"{rates.pop() * 10_000:+.2f} bps" if len(rates) == 1
+                else " ".join(f"{c} {cfg.rate(c) * 10_000:+.2f}" for c in cfg.coins) + " bps")
     lines = [
         f"== paper run {cfg.id}  {', '.join(cfg.coins)}  クォーター {cfg.quoter}  "
         + " ".join(f"{k}={v:g}" for k, v in cfg.params.items()),
         f"開始 {_utc(cfg.started)} UTC  " + (f"停止 {_utc(cfg.stopped)} UTC" if cfg.stopped else "停止の記録なし (動作中か、異常終了)")
         + f"  処理した気配の末尾 {_utc(end) if end else '-'} UTC",
-        f"メイカー手数料 {cfg.maker_rate * 10_000:+.2f} bps  板に載るまで {cfg.latency_ms} ms  "
+        f"メイカー手数料 {fee_text}  板に載るまで {cfg.latency_ms} ms  "
         f"約定の仮定 (c) {'あり' if cfg.cross_fills else 'なし (甘い側)'}  "
         f"気配 {cfg.interval:g} 秒 / 約定 {cfg.trades_interval:g} 秒" + (f"  ※ 末尾から {hours:g} 時間ぶん" if hours is not None else ""),
     ]
@@ -273,25 +288,26 @@ def build_paper_report(
         k = [sum(1 for f in res.fills if f.kind == kind) for kind in ("through", "queue", "cross")]
         mo = res.markouts.get(min(horizons), (float("nan"), 0))[0]
         lines.append(
-            f"{coin:<8} {len(res.fills):>4} {k[0]:>3}/{k[1]}/{k[2]:<3} ${res.volume_usd:>8,.0f} {res.spread_pnl:+8.3f} {res.fee_pnl:+8.3f} "
-            f"{res.inventory_pnl:+8.3f} {res.total_pnl:+8.3f}   {res.edge_bps:+5.2f} → {mo:+5.2f}   ${res.position * res.last_mid:+8,.0f}  "
+            f"{coin:<8} {len(res.fills):>4} {k[0]:>3}/{k[1]}/{k[2]:<3} {sym}{res.volume_usd:>8,.0f} {res.spread_pnl:+8.3f} {res.fee_pnl + 0.0:+8.3f} "
+            f"{res.inventory_pnl:+8.3f} {res.total_pnl:+8.3f}   {res.edge_bps:+5.2f} → {mo:+5.2f}   {sym}{res.position * res.last_mid:+8,.0f}  "
             f"遅れた約定 {acct['late_trades']} / 気配 {acct['late_books']}"
         )
         for i, v in enumerate((res.spread_pnl, res.fee_pnl, res.inventory_pnl, res.total_pnl, len(res.fills), res.volume_usd)):
             total[i] += v
         span = spans[coin]
         details.append(format_result(
-            coin, res, cfg.params, maker_rate=cfg.maker_rate, taker_rate=taker_rate, latency_ms=cfg.latency_ms,
+            coin, res, cfg.params, maker_rate=cfg.rate(coin), latency_ms=cfg.latency_ms,
+            taker_rate=insts[coin].taker_rate if insts[coin] else taker_rate, instrument=insts[coin],
             trade_gaps=store.gap_count(coin, max(since, span[0]), span[1]), quoter=cfg.quoter, cross_fills=cfg.cross_fills,
         ).replace("== 再生 ", "== paper ", 1))
     lines.append(
-        f"{'合計':<6} {total[4]:>4}           ${total[5]:>8,.0f} {total[0]:+8.3f} {total[1]:+8.3f} {total[2]:+8.3f} {total[3]:+8.3f}"
-        "   (USD。ファンディングと、残った在庫を閉じる費用は未計上)"
+        f"{'合計':<6} {total[4]:>4}           {sym}{total[5]:>8,.0f} {total[0]:+8.3f} {total[1] + 0.0:+8.3f} {total[2]:+8.3f} {total[3]:+8.3f}"
+        f"   ({quote}。ファンディングと、残った在庫を閉じる費用は未計上)"
     )
 
     lines.append("\n日ごと (UTC)              損益    約定    代金")
     for b, (pnl, n, usd) in sorted(_buckets(store, cfg.id, cfg.coins, 86_400_000, since).items()):
-        lines.append(f"  {_utc(b * 86_400_000, '%Y-%m-%d')}        {pnl:+9.3f}  {n:>5}  ${usd:>9,.0f}")
+        lines.append(f"  {_utc(b * 86_400_000, '%Y-%m-%d')}        {pnl:+9.3f}  {n:>5}  {sym}{usd:>9,.0f}")
     by_hour: dict[int, list[float]] = {}
     for b, vals in _buckets(store, cfg.id, cfg.coins, 3_600_000, since).items():
         agg = by_hour.setdefault(b % 24, [0.0, 0, 0.0, 0])
@@ -300,7 +316,7 @@ def build_paper_report(
         agg[3] += 1
     lines.append("\n時間帯ごと (UTC の時)       損益    約定    代金   (その時を含んだ回数)")
     for h, (pnl, n, usd, days) in sorted(by_hour.items()):
-        lines.append(f"  {h:02d} 時             {pnl:+9.3f}  {n:>5}  ${usd:>9,.0f}   ({days})")
+        lines.append(f"  {h:02d} 時             {pnl:+9.3f}  {n:>5}  {sym}{usd:>9,.0f}   ({days})")
     lines.append("  ※ 損益は口座の評価額の差 (持っている在庫の値動きを含む)。1 分ごとのスナップショットから出している")
     if not brief:
         lines += ["", *("\n\n".join(details).split("\n"))]

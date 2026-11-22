@@ -18,7 +18,9 @@
   params     パラメータ (既定値に --param を重ねたもの)。数値だけ
   books      気配の履歴。古い順で、最後が今の気配 (books[-1] is book)。直近 HISTORY_SEC 秒ぶん
   trades     市場の約定の履歴。古い順。時刻が now 以前で、直近 HISTORY_SEC 秒ぶん。
-             side は仕掛けた側 ("B" = 買い手主導、"A" = 売り手主導)。自分の疑似約定は入っていない
+             side は仕掛けた側 ("B" = 買い手主導、"A" = 売り手主導)。自分の疑似約定は入っていない。
+             GMO コインの記録では side が "U" (不明) の約定が大半。向きを使うなら "U" を売り買いどちらにも
+             数えないこと (`== "B"` でなければ売り、と書くと全部が売りに見える)
   state      この銘柄・この実行だけの dict。最初は空。指数移動平均など、次の呼び出しまで持ちたい値を入れる
 
 履歴に入るのは now 以前のものだけ (先読みできない)。now より後の気配・約定は、次の呼び出しで初めて見える。
@@ -182,7 +184,7 @@ def trade_flow(trades: tuple[Trade, ...], now: int, window_sec: float = FLOW_WIN
             break
         if t.side == "B":
             buy += t.px * t.sz
-        else:
+        elif t.side == "A":  # "U" (向きが分からない約定。GMO) はどちらにも数えない
             sell += t.px * t.sz
     return (buy - sell) / (buy + sell) if buy + sell > 0 else 0.0
 

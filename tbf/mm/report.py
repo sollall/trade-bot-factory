@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from tbf.mm.replay import DEFAULT_MAKER_RATE, MAX_BOOK_GAP_MS
 from tbf.mm.store import MmStore
 
@@ -12,10 +14,16 @@ def quantile(sorted_values: list[float], q: float) -> float:
     return sorted_values[min(len(sorted_values) - 1, int(len(sorted_values) * q))]
 
 
-def build_report(store: MmStore, since: int = 0, maker_rate: float = DEFAULT_MAKER_RATE) -> str:
-    maker_bps = maker_rate * 10_000
+def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = None) -> str:
+    """maker_rate を省くと、銘柄ごとに会場の値 (記録を始めたときに API から取ったもの) を使う"""
     lines = []
+    venue = store.venue()
+    if venue != "hyperliquid" and store.coins():
+        lines += [f"会場 {venue}  (金額は建値の通貨)", ""]
     for coin in store.coins():
+        inst = store.instrument(coin)
+        sym = inst.symbol if inst else "$"
+        maker_bps = (maker_rate if maker_rate is not None else inst.maker_rate if inst else DEFAULT_MAKER_RATE) * 10_000
         books = store.books(coin, since)
         if len(books) < 2:
             continue
@@ -37,23 +45,34 @@ def build_report(store: MmStore, since: int = 0, maker_rate: float = DEFAULT_MAK
         ask_usd = sorted(b.asks[0][1] * b.best_ask for b in books)
         notional = sum(t.px * t.sz for t in seen)
         buys = sum(t.px * t.sz for t in seen if t.side == "B")
+        unknown = sum(t.px * t.sz for t in seen if t.side == "U")
         med = quantile(spreads, 0.5)
         lines.append(f"== {coin}  記録 {hours:.2f} 時間  気配 {len(books)} 件 (間隔の中央値 {quantile(sorted(steps), 0.5) / 1000:.1f} 秒)")
         lines.append(
             f"  スプレッド (bps)   中央値 {med:6.2f}  p25 {quantile(spreads, 0.25):6.2f}  p75 {quantile(spreads, 0.75):6.2f}"
         )
+        if inst and inst.tick:
+            # 刻みが粗い銘柄では、スプレッドが刻み 1 つに張り付く。そこでは内側に指値を出せず、最良気配の列に並ぶしかない
+            mid = books[-1].mid
+            ticks = sorted(round((b.best_ask - b.best_bid) / inst.tick) for b in books)
+            lines.append(
+                f"  刻み {inst.tick:g} (= {inst.tick / mid * 10_000:.3f} bps)   スプレッドは刻み {quantile(ticks, 0.5)} 個ぶん (中央値)、"
+                f"刻み 1 個だった割合 {sum(1 for t in ticks if t <= 1) / len(ticks) * 100:.0f}%   "
+                f"最小数量 {inst.min_size:g} (= {sym}{inst.min_size * mid:,.0f})"
+            )
         lines.append(
             f"  片側スプレッド − メイカー手数料 ({maker_bps:+.2f} bps) = {med / 2 - maker_bps:+.2f} bps  "
             "※ 最良気配に並んで約定し、その後ミッドが動かない場合の上限。逆選択は replay で見る"
         )
         lines.append(
-            f"  最良気配の厚さ     買 中央値 ${quantile(bid_usd, 0.5):,.0f} (p25 ${quantile(bid_usd, 0.25):,.0f})  "
-            f"売 中央値 ${quantile(ask_usd, 0.5):,.0f} (p25 ${quantile(ask_usd, 0.25):,.0f})"
+            f"  最良気配の厚さ     買 中央値 {sym}{quantile(bid_usd, 0.5):,.0f} (p25 {sym}{quantile(bid_usd, 0.25):,.0f})  "
+            f"売 中央値 {sym}{quantile(ask_usd, 0.5):,.0f} (p25 {sym}{quantile(ask_usd, 0.25):,.0f})"
         )
         if hours > 0:
             lines.append(
-                f"  約定               {len(seen) / hours:,.0f} 件/時  ${notional / hours:,.0f}/時  "
-                f"(記録した {len(seen)} 件、買い手主導が代金の {buys / notional * 100 if notional else 0:.0f}%)"
+                f"  約定               {len(seen) / hours:,.0f} 件/時  {sym}{notional / hours:,.0f}/時  "
+                f"(記録した {len(seen)} 件、買い手主導が代金の {buys / notional * 100 if notional else 0:.0f}%"
+                + (f"、向きが分からない約定が {unknown / notional * 100:.0f}%" if unknown else "") + ")"
             )
         gaps = store.gap_count(coin, start, end)
         tp = store.query(

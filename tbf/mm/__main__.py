@@ -1,6 +1,8 @@
 """
 マーケットメイクの準備: シャドーモードの記録とオフライン再生 (売買はしない。鍵も不要)
-  python -m tbf.mm record --coins INJ,MON,ZRO   Hyperliquid の気配と約定を記録 (Ctrl-C で停止)
+  python -m tbf.mm record --coins INJ,MON,ZRO   気配と約定を記録 (Ctrl-C で停止)。既定の会場は Hyperliquid
+  python -m tbf.mm record --venue bitbank --coins xrp_jpy,eth_jpy --db data/mm_bitbank.sqlite
+                                                会場は hyperliquid / gmo / bitbank。db は会場ごとに分ける
   python -m tbf.mm report [--hours N]           記録した市場の様子を集計
   python -m tbf.mm replay --coin INJ [--param half_spread_bps=4 ...]
                                                 記録の上で指値の出し方を試す (API は叩かない)
@@ -26,10 +28,11 @@ from tbf.core.instrument import DEFAULT_FEES
 from tbf.http import UrllibHttp
 from tbf.mm.paper import Paper, build_paper_report, load_run, run_result, run_span
 from tbf.mm.quoter import QUOTERS, parse_params
-from tbf.mm.recorder import DEFAULT_BUDGET, WEIGHT_LIMIT_PER_MIN, Recorder, check_budget
-from tbf.mm.replay import DEFAULT_LATENCY_MS, DEFAULT_MAKER_RATE, add_markouts, format_result, simulate
+from tbf.mm.recorder import DEFAULT_BUDGET, Recorder, check_budget
+from tbf.mm.replay import DEFAULT_LATENCY_MS, add_markouts, format_result, simulate
 from tbf.mm.report import build_report
 from tbf.mm.store import MmStore
+from tbf.mm.venues import VENUES, scale_defaults
 from tbf.worker.notify import Notifier
 
 TAKER_RATE = DEFAULT_FEES[("hyperliquid", "perp")].taker_rate
@@ -48,26 +51,32 @@ async def _daily_reports(store: MmStore, run: int, notifier: Notifier, stop: asy
             await notifier.send(":bar_chart: mm paper daily\n```\n" + text + "\n```")
 
 
+def _maker(a: argparse.Namespace):
+    """--maker-bps (--fee-bps) を渡したときだけその値。省くと None = 銘柄ごとに会場の値を使う"""
+    return None if a.maker_bps is None else a.maker_bps / 10_000
+
+
 async def _record(a: argparse.Namespace) -> int:
     paper_mode = a.command == "paper"
     coins = [c.strip() for c in a.coins.split(",") if c.strip()]
     if not coins:
         _log("--coins に銘柄を指定してください (例: --coins INJ,MON,ZRO)")
         return 1
+    venue = VENUES[a.venue]()
     try:
-        used = check_budget(len(coins), a.interval, a.trades_interval, a.budget)
+        used = check_budget(len(coins), a.interval, a.trades_interval, a.budget, venue)
     except ValueError as e:
         _log(str(e))
         return 1
     if paper_mode:
         try:
-            params = parse_params(QUOTERS[a.quoter][1], a.param)
+            params = parse_params(scale_defaults(QUOTERS[a.quoter][1], venue.quote), a.param)
         except ValueError as e:
             _log(str(e))
             return 1
     store = MmStore(a.db)
     http = UrllibHttp(timeout=10)
-    recorder = Recorder(http, store, coins, a.interval, a.trades_interval, a.depth, log=_log)
+    recorder = Recorder(http, store, coins, a.interval, a.trades_interval, a.depth, log=_log, venue=venue)
     try:
         await recorder.setup()
     except Exception as e:  # noqa: BLE001
@@ -76,7 +85,7 @@ async def _record(a: argparse.Namespace) -> int:
     paper = None
     if paper_mode:
         paper = Paper(
-            store, coins, a.quoter, params, maker_rate=a.maker_bps / 10_000, latency_ms=a.latency_ms,
+            store, coins, a.quoter, params, maker_rate=_maker(a), latency_ms=a.latency_ms,
             cross_fills=not a.no_cross_fill, interval=a.interval, trades_interval=a.trades_interval, depth=a.depth, log=_log,
         )
         recorder.on_book, recorder.on_trades = paper.on_book, paper.on_trades
@@ -86,7 +95,7 @@ async def _record(a: argparse.Namespace) -> int:
         loop.add_signal_handler(sig, stop.set)
     _log(
         f"recording {', '.join(coins)}: 気配 {a.interval:g} 秒ごと / 約定 {a.trades_interval:g} 秒ごと  "
-        f"毎分の重み {used:.0f} / 上限 {WEIGHT_LIMIT_PER_MIN} (重みと上限は未確認の値。docs/mm.md)"
+        f"毎分の{venue.unit} {used:.0f} / 上限 {venue.limit_per_min:.0f} ({venue.limit_note}。docs/mm.md)"
     )
     if paper is None:
         await recorder.run(stop, a.minutes * 60 if a.minutes else None)
@@ -127,15 +136,16 @@ def _replay_run(a: argparse.Namespace) -> int:
         if span is None:
             print(f"== {coin}: run {cfg.id} には確定した気配がありません\n")
             continue
+        inst = store.instrument(coin)
         books = store.books(coin, span[0], span[1])
         res = simulate(
             books, store.trades(coin, span[0], span[1]), QUOTERS[cfg.quoter][0], cfg.params,
-            sz_decimals=store.sz_decimals(coin), maker_rate=cfg.maker_rate, latency_ms=cfg.latency_ms,
+            instrument=inst, maker_rate=cfg.rate(coin), latency_ms=cfg.latency_ms,
             horizons=horizons, cross_fills=cfg.cross_fills,
         )
         add_markouts(res, store.books(coin, span[0]), horizons)  # paper-report と同じく、区間より後の気配も使って測る
         print(format_result(
-            coin, res, cfg.params, maker_rate=cfg.maker_rate, taker_rate=TAKER_RATE, latency_ms=cfg.latency_ms,
+            coin, res, cfg.params, maker_rate=cfg.rate(coin), taker_rate=inst.taker_rate, latency_ms=cfg.latency_ms, instrument=inst,
             trade_gaps=store.gap_count(coin, span[0], span[1]), quoter=cfg.quoter, cross_fills=cfg.cross_fills,
         ))
         p = run_result(store, cfg.id, coin, horizons=horizons)
@@ -157,25 +167,25 @@ def _replay(a: argparse.Namespace) -> int:
         _log("--coin を指定してください")
         return 1
     quoter, defaults = QUOTERS[a.quoter]
-    try:
-        params = parse_params(defaults, a.param)
-    except ValueError as e:
-        _log(str(e))
-        return 1
     store = MmStore(a.db)
     since = _since(store, a.hours, a.coin)
     books = store.books(a.coin, since)
-    sz_decimals = store.sz_decimals(a.coin)
-    if len(books) < 2 or sz_decimals is None:
+    inst = store.instrument(a.coin)
+    if len(books) < 2 or inst is None:
         _log(f"{a.coin} の記録がありません ({a.db})。記録のある銘柄: {', '.join(store.coins()) or '(なし)'}")
         return 1
-    maker_rate = a.maker_bps / 10_000
+    try:
+        params = parse_params(scale_defaults(defaults, inst.quote), a.param)
+    except ValueError as e:
+        _log(str(e))
+        return 1
+    maker_rate = inst.maker_rate if a.maker_bps is None else a.maker_bps / 10_000
     res = simulate(
-        books, store.trades(a.coin, since), quoter, params, sz_decimals=sz_decimals, maker_rate=maker_rate,
+        books, store.trades(a.coin, since), quoter, params, instrument=inst, maker_rate=maker_rate,
         latency_ms=a.latency_ms, horizons=tuple(int(h) for h in a.horizons.split(",")), cross_fills=not a.no_cross_fill,
     )
     print(format_result(
-        a.coin, res, params, maker_rate=maker_rate, taker_rate=TAKER_RATE,
+        a.coin, res, params, maker_rate=maker_rate, taker_rate=inst.taker_rate, instrument=inst,
         latency_ms=a.latency_ms, trade_gaps=store.gap_count(a.coin, books[0].time, books[-1].time), quoter=a.quoter,
         cross_fills=not a.no_cross_fill,
     ))
@@ -187,12 +197,14 @@ async def main(argv: list[str]) -> int:
     ap.add_argument("command", choices=["record", "report", "replay", "paper", "paper-report"])
     ap.add_argument("--db", default="data/mm.sqlite")
     ap.add_argument("--hours", type=float, default=None, help="記録の末尾から遡る時間 (省略すると全部)")
-    ap.add_argument("--maker-bps", "--fee-bps", dest="maker_bps", type=float, default=DEFAULT_MAKER_RATE * 10_000, help="メイカー手数料 (bps。払う向きが正)")
+    ap.add_argument("--maker-bps", "--fee-bps", dest="maker_bps", type=float, default=None,
+                    help="メイカー手数料 (bps。払う向きが正、リベートは負)。省くと会場の値 (銘柄ごと)")
+    ap.add_argument("--venue", default="hyperliquid", choices=sorted(VENUES), help="record / paper の会場 (db ごとに 1 つ)")
     # record
     ap.add_argument("--coins", default="", help="カンマ区切り (例: INJ,MON,ZRO)")
     ap.add_argument("--interval", type=float, default=2.0, help="気配を取る間隔 (秒)")
     ap.add_argument("--trades-interval", type=float, default=10.0, help="約定を取る間隔 (秒)")
-    ap.add_argument("--depth", type=int, default=10, help="残す気配の段数 (片側。API が返すのは 20 段まで)")
+    ap.add_argument("--depth", type=int, default=10, help="残す気配の段数 (片側。Hyperliquid が返すのは 20 段まで)")
     ap.add_argument("--budget", type=float, default=DEFAULT_BUDGET, help="流量制限の上限のうち使ってよい割合")
     ap.add_argument("--minutes", type=float, default=None, help="この分数で止める (省略すると止めるまで)")
     # replay
@@ -214,7 +226,7 @@ async def main(argv: list[str]) -> int:
     if a.command == "replay":
         return _replay(a)
     store = MmStore(a.db)
-    print(build_report(store, _since(store, a.hours), a.maker_bps / 10_000))
+    print(build_report(store, _since(store, a.hours), _maker(a)))
     return 0
 
 

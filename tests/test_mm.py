@@ -1,10 +1,14 @@
+import dataclasses
 import json
 import random
 import re
+import time
+from datetime import datetime, timezone
 
 import pytest
 
 import tbf.http
+import tbf.mm.venues
 from tbf.mm.book import Book, Trade, price_decimals, round_down, round_up
 from tbf.mm.quoter import BASELINE_PARAMS, HISTORY_SEC, Context, Quote, baseline, parse_params
 from tbf.mm.recorder import WEIGHT_LIMIT_PER_MIN, Recorder, check_budget, weight_per_min
@@ -838,3 +842,393 @@ def test_new_quoters_do_not_change_past_decisions_when_the_future_changes(name):
     # 同じ記録なら何度流しても同じ (state が実行をまたいで残らない)
     again = simulate(books, trades, fn, params, sz_decimals=1, latency_ms=250)
     assert again.fills == a.fills and again.total_pnl == a.total_pnl
+
+
+# ---------------------------------------------------------------- 会場 (GMO コイン / bitbank)
+
+from tbf.mm.venues import (  # noqa: E402
+    Bitbank,
+    Gmo,
+    Instrument,
+    RateLimited,
+    hyperliquid_instrument,
+    parse_bitbank_book,
+    parse_bitbank_instruments,
+    parse_bitbank_trades,
+    parse_gmo_book,
+    parse_gmo_instruments,
+    parse_gmo_trades,
+    scale_defaults,
+)
+
+# 2026-11-22 に実物の応答から切り出した小さな例 (値はそのまま、件数だけ減らした)
+GMO_SYMBOLS = {"status": 0, "responsetime": "2026-11-22T21:54:21.652Z", "data": [
+    {"symbol": "SOL", "minOrderSize": "0.01", "maxOrderSize": "500", "sizeStep": "0.01", "tickSize": "1", "takerFee": "0.0009", "makerFee": "-0.0003"},
+    {"symbol": "ETH_JPY", "minOrderSize": "0.01", "maxOrderSize": "100", "sizeStep": "0.01", "tickSize": "1", "takerFee": "0", "makerFee": "0"},
+    {"symbol": "XRP_JPY", "minOrderSize": "10", "maxOrderSize": "100000", "sizeStep": "10", "tickSize": "0.001", "takerFee": "0", "makerFee": "0"},
+]}
+GMO_BOOK = {"status": 0, "responsetime": "2026-11-22T21:54:21.196Z", "data": {
+    # 売りは安い順、買いは高い順で返る。気配そのものに時刻は無い
+    "asks": [{"price": "272605", "size": "0.12"}, {"price": "272642", "size": "0.2"}, {"price": "272643", "size": "0.4"}],
+    "bids": [{"price": "272463", "size": "0.26"}, {"price": "272462", "size": "0.3"}, {"price": "272459", "size": "0.02"}],
+    "symbol": "ETH_JPY"}}
+GMO_TRADES = {"status": 0, "responsetime": "2026-11-22T21:54:22.411Z", "data": {"pagination": {"count": 100, "currentPage": 1}, "list": [
+    # 新しい順。約定に id が無い。同じ時刻・値段・数量で BUY と SELL が並ぶことがある
+    {"price": "272625", "side": "BUY", "size": "0.1", "timestamp": "2026-11-22T21:54:11.702Z"},
+    {"price": "272625", "side": "SELL", "size": "0.1", "timestamp": "2026-11-22T21:54:11.702Z"},
+    {"price": "272623", "side": "BUY", "size": "0.4", "timestamp": "2026-11-22T21:54:08.286Z"},
+    {"price": "272623", "side": "BUY", "size": "0.4", "timestamp": "2026-11-22T21:54:08.286Z"},
+]}}
+BITBANK_PAIRS = {"success": 1, "data": {"pairs": [
+    {"name": "xrp_jpy", "base_asset": "xrp", "quote_asset": "jpy", "maker_fee_rate_quote": "-0.0002", "taker_fee_rate_quote": "0.0012",
+     "unit_amount": "0.0001", "price_digits": 3, "amount_digits": 4, "is_enabled": True},
+    {"name": "btc_jpy", "base_asset": "btc", "quote_asset": "jpy", "maker_fee_rate_quote": "0", "taker_fee_rate_quote": "0.001",
+     "unit_amount": "0.0001", "price_digits": 0, "amount_digits": 4, "is_enabled": True},
+    {"name": "old_jpy", "base_asset": "old", "quote_asset": "jpy", "maker_fee_rate_quote": "0", "taker_fee_rate_quote": "0",
+     "unit_amount": "1", "price_digits": 0, "amount_digits": 0, "is_enabled": False},
+]}}
+BITBANK_DEPTH = {"success": 1, "data": {
+    "asks": [["146.860", "24218.9341"], ["146.861", "6766.4808"], ["146.868", "6766.4808"]],
+    "bids": [["146.859", "343.9556"], ["146.832", "329.3210"], ["146.831", "60.3380"]],
+    "asks_over": "13028174.9339", "bids_under": "21447146.5792", "timestamp": 1795384483940, "sequenceId": "35495873891"}}
+BITBANK_TRADES = {"success": 1, "data": {"transactions": [
+    {"transaction_id": 1241108853, "side": "buy", "price": "146.860", "amount": "0.0001", "executed_at": 1795384471762},
+    {"transaction_id": 1241108852, "side": "sell", "price": "146.859", "amount": "4.2560", "executed_at": 1795384464768},
+]}}
+
+
+def test_gmo_responses_are_read_as_recorded_form():
+    inst = parse_gmo_instruments(GMO_SYMBOLS)
+    sol, eth = inst["SOL"], inst["ETH_JPY"]
+    assert (sol.tick, sol.size_step, sol.min_size, sol.maker_rate, sol.taker_rate) == (1.0, 0.01, 0.01, -0.0003, 0.0009)
+    assert (sol.quote, sol.venue, sol.symbol) == ("JPY", "gmo", "¥")
+    assert sol.can_short is False and eth.can_short is True  # 現物は売りから入れない。*_JPY はレバレッジ
+    assert inst["XRP_JPY"].tick == 0.001 and inst["XRP_JPY"].size_step == 10
+
+    book = parse_gmo_book(GMO_BOOK, depth=2)
+    assert book.time == 1795384461196  # responsetime (気配に時刻が無いので)
+    assert book.bids == ((272463.0, 0.26), (272462.0, 0.3)) and book.asks == ((272605.0, 0.12), (272642.0, 0.2))
+    shuffled = {**GMO_BOOK, "data": {"asks": GMO_BOOK["data"]["asks"][::-1], "bids": GMO_BOOK["data"]["bids"][::-1]}}
+    assert parse_gmo_book(shuffled, depth=2) == book  # 並び順は応答に頼らない
+
+    trades = parse_gmo_trades(GMO_TRADES)
+    # 同じ時刻・値段・数量の BUY と SELL は 1 つの約定の両側。1 件にまとめ、向きは不明 ("U") にする。
+    # 対にならない行だけ、BUY を買い手主導として読む
+    assert [(t.time, t.side, t.px, t.sz) for t in trades] == [
+        (1795384448286, "B", 272623.0, 0.4), (1795384448286, "B", 272623.0, 0.4), (1795384451702, "U", 272625.0, 0.1)]
+    assert len({(t.time, t.tid) for t in trades}) == 3  # 同じ中身が 2 件あっても別の約定として残る
+    assert [t.tid for t in parse_gmo_trades(GMO_TRADES)] == [t.tid for t in trades]  # 同じ応答なら同じ id (重複として落とせる)
+    # 同じ中身の組が減っても、残ったほうは既に記録した id と重なる (新しい約定として二重に数えない)
+    cut = {**GMO_TRADES, "data": {"list": GMO_TRADES["data"]["list"][:3]}}
+    assert {(t.time, t.tid) for t in parse_gmo_trades(cut)} < {(t.time, t.tid) for t in trades}
+    # 上限いっぱい (100 行) の応答は、いちばん古い時刻で対が切れているかもしれない。その時刻の行は使わない
+    # (片方だけ残った SELL を「売り手主導の別の約定」として数えないため)
+    rows = [{"price": "100", "side": s, "size": "1", "timestamp": f"2026-11-22T21:54:{10 + i:02d}.000Z"} for i in range(49, 0, -1) for s in ("BUY", "SELL")]
+    full = {"status": 0, "data": {"list": rows + [{"price": "99", "side": "BUY", "size": "2", "timestamp": "2026-11-22T21:54:10.000Z"},
+                                                   {"price": "99", "side": "SELL", "size": "2", "timestamp": "2026-11-22T21:54:10.000Z"}]}}
+    assert len(full["data"]["list"]) == 100 and [t.side for t in parse_gmo_trades(full)] == ["U"] * 49
+    full["data"]["list"].pop()  # 100 行に満たなければ全部使う
+    assert [(t.side, t.px) for t in parse_gmo_trades(full)][:1] == [("B", 99.0)]
+
+    with pytest.raises(RateLimited):
+        parse_gmo_trades({"status": 4, "messages": [{"message_code": "ERR-5003", "message_string": "Requests are too many."}]})
+    with pytest.raises(RuntimeError, match="ERR-5106"):
+        parse_gmo_book({"status": 1, "messages": [{"message_code": "ERR-5106", "message_string": "Invalid request parameter."}]}, 5)
+
+
+def test_bitbank_responses_are_read_as_recorded_form():
+    inst = parse_bitbank_instruments(BITBANK_PAIRS)
+    xrp = inst["xrp_jpy"]
+    assert (xrp.tick, xrp.size_step, xrp.min_size, xrp.maker_rate, xrp.taker_rate) == (0.001, 0.0001, 0.0001, -0.0002, 0.0012)
+    assert inst["btc_jpy"].tick == 1.0 and inst["btc_jpy"].maker_rate == 0.0
+    assert xrp.can_short is False and xrp.quote == "JPY" and "old_jpy" not in inst  # 停止中の銘柄は無いものとして扱う
+
+    book = parse_bitbank_book(BITBANK_DEPTH, depth=2)
+    assert (book.time, book.bids, book.asks) == (1795384483940, ((146.859, 343.9556), (146.832, 329.321)), ((146.86, 24218.9341), (146.861, 6766.4808)))
+    trades = parse_bitbank_trades(BITBANK_TRADES)
+    # side は taker 側 (公式ドキュメント)。buy = 買い手主導 = 売り板 (146.860) で成立
+    assert [(t.time, t.side, t.px, t.sz, t.tid) for t in trades] == [
+        (1795384471762, "B", 146.86, 0.0001, 1241108853), (1795384464768, "A", 146.859, 4.256, 1241108852)]
+    with pytest.raises(RateLimited):
+        parse_bitbank_trades({"success": 0, "data": {"code": 10009}})
+    with pytest.raises(RuntimeError, match="10000"):
+        parse_bitbank_book({"success": 0, "data": {"code": 10000}}, 5)
+
+
+class FakeDomestic:
+    """GMO / bitbank の公開 API を URL で振り分けて真似る。約定は直近の limit 件だけ返す (新しい順)"""
+
+    def __init__(self):
+        self.time = 1_795_384_000_000
+        self.status = 200
+        self.fills = []  # (time, taker が買いか, 値段, 数量) 古い順
+        self.book = (11159, 11160)
+        self.twins = False  # GMO の実物: 1 つの約定が BUY と SELL の 2 行で返る (大半がこの形)
+
+    def trade(self, n, buy=False, px="11159", sz="0.5", same_ms=False):
+        for _ in range(n):
+            self.time += 0 if same_ms else 7
+            self.fills.append((self.time, buy, px, sz))
+
+    async def request(self, method, url, headers=None, body=None):
+        assert method == "GET" and body is None
+        if self.status != 200:
+            return self.status, "Too Many Requests"
+        iso = lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{ms % 1000:03d}Z"  # noqa: E731
+        bid, ask = self.book
+        if "/public/v1/symbols" in url:
+            return 200, json.dumps(GMO_SYMBOLS)
+        if "/public/v1/orderbooks" in url:
+            self.time += 1
+            return 200, json.dumps({"status": 0, "responsetime": iso(self.time), "data": {
+                "asks": [{"price": str(ask + i), "size": "20.5"} for i in range(30)],
+                "bids": [{"price": str(bid - i), "size": "7.25"} for i in range(30)]}})
+        if "/public/v1/trades" in url:
+            rows = [{"price": p, "side": side, "size": s, "timestamp": iso(t)} for t, b, p, s in self.fills
+                    for side in (("SELL", "BUY") if self.twins else ("BUY",) if b else ("SELL",))]
+            return 200, json.dumps({"status": 0, "responsetime": iso(self.time), "data": {"list": rows[::-1][:100]}})
+        if url.endswith("/spot/pairs"):
+            return 200, json.dumps(BITBANK_PAIRS)
+        if url.endswith("/depth"):
+            self.time += 1
+            return 200, json.dumps({"success": 1, "data": {
+                "asks": [[f"{146.860 + i / 1000:.3f}", "6766.4808"] for i in range(200)],
+                "bids": [[f"{146.859 - i / 1000:.3f}", "343.9556"] for i in range(200)], "timestamp": self.time}})
+        if url.endswith("/transactions"):
+            rows = [{"transaction_id": 5000 + i, "side": "buy" if b else "sell", "price": p, "amount": s, "executed_at": t}
+                    for i, (t, b, p, s) in enumerate(self.fills)][-60:]
+            return 200, json.dumps({"success": 1, "data": {"transactions": rows[::-1]}})
+        raise AssertionError(url)
+
+
+async def test_record_gmo_dedupes_without_trade_ids_and_flags_gaps(tmp_path):
+    http = FakeDomestic()
+    store = MmStore(tmp_path / "gmo.sqlite")
+    rec = Recorder(http, store, ["SOL"], venue=Gmo(), min_gap=0, clock=lambda: http.time + 300, log=lambda m: None)
+    await rec.setup()
+    assert store.venue() == "gmo" and store.instrument("SOL").maker_rate == -0.0003 and store.sz_decimals("SOL") is None
+    http.trade(3)
+    http.trade(2, same_ms=True)  # 同じミリ秒・同じ中身の約定が 3 件 (id が無いので中身では区別できない)
+    await rec.poll_trades()
+    http.trade(4, buy=True, px="11160")
+    await rec.poll_trades()
+    await rec.poll_trades()
+    assert [r["new_rows"] for r in store.query("SELECT new_rows FROM polls ORDER BY rowid")] == [5, 4, 0]
+    assert len(store.trades("SOL")) == 9 and not store.query("SELECT * FROM gaps")
+    assert [t.side for t in store.trades("SOL")] == ["A"] * 5 + ["B"] * 4
+    http.trade(130)  # 100 件しか返らない (うち、いちばん古い時刻の 1 件は使わない)
+    await rec.poll_trades()
+    assert len(store.query("SELECT * FROM gaps")) == 1 and len(store.trades("SOL")) == 108
+    # 実物に多い形: 1 つの約定が BUY と SELL の 2 行で返る。1 件として残し、出来高を 2 重に数えない
+    http.twins = True
+    http.trade(3, buy=True, px="11160", sz="2")
+    await rec.poll_trades()
+    await rec.poll_trades()
+    assert [(t.side, t.sz) for t in store.trades("SOL")[-3:]] == [("U", 2.0)] * 3
+
+    await rec.poll_books()
+    (book,) = store.books("SOL")
+    assert (book.best_bid, book.best_ask, len(book.bids)) == (11159.0, 11160.0, 10)
+
+    http.status = 429  # 取り直さずに記録し、しばらく休む
+    await rec.poll_books()
+    assert rec.rate_limited and "429" in store.query("SELECT error FROM polls WHERE error IS NOT NULL")[0][0]
+
+
+async def test_record_bitbank_and_refuse_mixing_venues(tmp_path):
+    http = FakeDomestic()
+    store = MmStore(tmp_path / "bb.sqlite")
+    rec = Recorder(http, store, ["xrp_jpy"], venue=Bitbank(), min_gap=0, clock=lambda: http.time + 300, log=lambda m: None)
+    await rec.setup()
+    http.trade(70, px="146.859", sz="1.5")  # 60 件しか返らない
+    await rec.poll_trades()
+    http.trade(5, buy=True, px="146.860", sz="2.0")
+    await rec.poll_books()
+    await rec.poll_trades()
+    await rec.poll_books()
+    assert len(store.trades("xrp_jpy")) == 65 and not store.query("SELECT * FROM gaps")
+    assert store.books("xrp_jpy")[0].bids[1] == (146.858, 343.9556)
+    report = build_report(store)
+    assert "会場 bitbank" in report and "メイカー手数料 (-2.00 bps)" in report  # 会場の値 (リベート) が既定になる
+    assert "メイカー手数料 (+1.00 bps)" in build_report(store, maker_rate=0.0001)
+
+    # 違う会場の記録を同じ db に足そうとしたら止める。無い銘柄・停止中の銘柄も止める
+    with pytest.raises(ValueError, match="bitbank の記録"):
+        await Recorder(http, store, ["SOL"], venue=Gmo(), min_gap=0, log=lambda m: None).setup()
+    with pytest.raises(ValueError, match="bitbank の記録"):
+        await Recorder(FakeHyperliquid(), store, ["INJ"], log=lambda m: None).setup()
+    with pytest.raises(ValueError, match="old_jpy"):
+        await Recorder(http, MmStore(tmp_path / "x.sqlite"), ["old_jpy"], venue=Bitbank(), min_gap=0, log=lambda m: None).setup()
+
+
+async def test_db_without_venue_is_read_as_hyperliquid(tmp_path):
+    # 会場を残す前の版で作った db: meta も instruments も無く、coins に数量の小数桁だけがある
+    store = MmStore(tmp_path / "old.sqlite")
+    store.set_coin("INJ", 1, 0)
+    store.add_book("INJ", flat_books(n=1)[0], 0)
+    store.conn.execute("DELETE FROM meta")
+    store.commit()
+    assert store.venue() == "hyperliquid"
+    inst = store.instrument("INJ")
+    assert inst == hyperliquid_instrument("INJ", 1) and (inst.quote, inst.tick, inst.maker_rate, inst.can_short) == ("USD", None, 0.00015, True)
+    with pytest.raises(ValueError, match="hyperliquid の記録"):
+        await Recorder(FakeDomestic(), store, ["SOL"], venue=Gmo(), min_gap=0, log=lambda m: None).setup()
+    hl = FakeHyperliquid()
+    await Recorder(hl, store, ["INJ"], clock=lambda: hl.time, log=lambda m: None).setup()  # 同じ会場なら続きに足せる
+    assert store.venue() == "hyperliquid" and store.sz_decimals("INJ") == 1
+
+
+def test_weight_budget_is_per_venue():
+    # Hyperliquid は重み (気配 2、約定 20)、国内は回数。上限はどれも裏取りが足りないので、既定は半分まで
+    assert check_budget(5, 3, 10, venue=Gmo()) == 130  # 5 * (20 + 6)
+    with pytest.raises(ValueError, match="回数 216 > 使ってよい量 150"):
+        check_budget(6, 2, 10, venue=Gmo())
+    assert check_budget(4, 2, 10, venue=Bitbank()) == 144
+    with pytest.raises(ValueError, match="流量制限"):
+        check_budget(9, 2, 10, venue=Bitbank())
+    assert weight_per_min(3, 3, 8) == 570  # 会場を省くと今までどおり Hyperliquid
+
+
+SOL_SPOT = Instrument("SOL", "gmo", "JPY", tick=1.0, size_step=0.01, min_size=0.01, maker_rate=-0.0003, taker_rate=0.0009, can_short=False)
+
+
+def coarse_books(n=4):
+    """スプレッドが刻み 1 つ (11159 / 11160)。GMO の SOL 現物の実物と同じ形"""
+    return [Book(i * 10 * SEC, ((11159.0, 7.25), (11158.0, 3.0)), ((11160.0, 20.5), (11161.0, 4.0))) for i in range(n)]
+
+
+def test_coarse_tick_rounds_onto_best_quote_and_waits_in_queue():
+    run_sol = lambda trades, quoter, **kw: simulate(coarse_books(), trades, quoter, {}, instrument=SOL_SPOT, latency_ms=0, **kw)  # noqa: E731
+    # スプレッドの内側 (11159.6) に出したくても、刻みに丸めると最良買い 11159 に並ぶ。前に 7.25 枚いる
+    inside = lambda ctx: Quote(bid=11159.6, bid_size=1.004, ask=11159.4, ask_size=1.004)  # noqa: E731
+    res = run_sol([Trade(2 * SEC, "A", 11159.0, 7.0)], inside)
+    assert res.fills == [] and (res.placed, res.rejected) == (2, 0)  # 売りも 11160 に切り上がって最良売りに並ぶ
+    res = run_sol([Trade(2 * SEC, "A", 11159.0, 7.0), Trade(3 * SEC, "A", 11159.0, 0.75)], inside)
+    (f,) = res.fills
+    assert (f.px, f.size, f.kind) == (11159.0, 0.5, "queue")  # 残りの列 0.25 の後ろの 0.5 だけ
+    # 売り側も同じ: 最良売り 11160 の 20.5 枚の後ろ。数量は刻み 0.01 に切り下げて 1.00
+    res = run_sol([Trade(2 * SEC, "B", 11160.0, 21.0), Trade(3 * SEC, "B", 11160.0, 5.0)], inside)
+    assert [(f.side, f.px, f.size, f.kind) for f in res.fills] == [(SELL, 11160.0, 0.5, "queue"), (SELL, 11160.0, 0.5, "queue")]
+    # 値段を抜けた約定 (a) は列に関係なく約定する
+    assert [(f.px, f.kind) for f in run_sol([Trade(2 * SEC, "A", 11158.0, 0.3)], inside).fills] == [(11159.0, "through")]
+
+    # 相手の気配に当たる値段は出せない (11160.2 の買いは 11160 に丸まり、最良売りと同じ)
+    crossing = lambda ctx: Quote(bid=11160.2, bid_size=1)  # noqa: E731
+    res = run_sol([Trade(2 * SEC, "A", 11158.0, 5.0)], crossing)
+    assert res.fills == [] and res.placed == 0 and res.rejected == 4
+    # 最小数量 (0.01) に届かない指値は出さない
+    tiny = lambda ctx: Quote(bid=11159.0, bid_size=0.009)  # noqa: E731
+    assert run_sol([], tiny).too_small == 4
+    # 最小数量が数量の刻みより大きい銘柄もある (刻みに丸めて残っても、最小に届かなければ出さない)
+    big_min = dataclasses.replace(SOL_SPOT, min_size=0.05)
+    assert simulate(coarse_books(), [], lambda ctx: Quote(bid=11159.0, bid_size=0.03), {}, instrument=big_min, latency_ms=0).too_small == 4
+    # 手数料は銘柄の値 (リベート) が既定。上書きもできる
+    res = run_sol([Trade(2 * SEC, "A", 11158.0, 0.3)], inside)
+    assert res.fee_pnl == pytest.approx(11159.0 * 0.3 * 0.0003) and res.fee_pnl > 0
+    assert run_sol([Trade(2 * SEC, "A", 11158.0, 0.3)], inside, maker_rate=0.0001).fee_pnl < 0
+
+    # 刻みが 10 の累乗でなくても、小数の刻みでも丸めは刻みの倍数になる
+    for tick, want_bid, want_ask in ((0.5, 11159.5, 11160.0), (0.001, 11159.6, 11159.601), (5.0, 11155.0, 11160.0)):
+        inst = dataclasses.replace(SOL_SPOT, tick=tick)
+        wide = [Book(i * SEC, ((11100.0, 5.0),), ((11200.0, 5.0),)) for i in range(2)]
+        sim = Sim(lambda ctx: Quote(bid=11159.6, bid_size=1, ask=11159.6004, ask_size=1), {}, instrument=inst, latency_ms=0)
+        sim.step(wide[0])
+        assert (sim.live[BUY].px, sim.live[SELL].px) == (want_bid, want_ask), tick
+
+    # Hyperliquid の規則 (有効 5 桁) でも同じ値段に丸まり、同じように列に並ぶ
+    hl = simulate(coarse_books(), [Trade(2 * SEC, "A", 11159.0, 7.0), Trade(3 * SEC, "A", 11159.0, 0.75)], inside, {},
+                  sz_decimals=2, latency_ms=0)
+    assert [(f.px, f.size, f.kind) for f in hl.fills] == [(11159.0, 0.5, "queue")]
+
+
+def test_trades_of_unknown_side_fill_whichever_quote_the_price_reached():
+    # GMO の約定は仕掛けた側が分からない ("U")。値段が届いた側の指値にだけ当てる
+    both = fixed(bid=99.9, ask=100.1)
+    one = lambda t: run(flat_books(), [t], both).fills  # noqa: E731
+    assert one(Trade(5 * SEC, "U", 100.0, 5)) == []  # 自分の指値の間で成立した約定は、どちらにも当たらない
+    assert [(f.side, f.px, f.size, f.kind) for f in one(Trade(5 * SEC, "U", 99.8, 3))] == [(BUY, 99.9, 3, "through")]
+    assert [(f.side, f.px, f.size, f.kind) for f in one(Trade(5 * SEC, "U", 100.2, 4))] == [(SELL, 100.1, 4, "through")]
+    # ちょうどの値段なら前の列 (100 枚) を先に消化する
+    assert one(Trade(5 * SEC, "U", 99.9, 60)) == []
+    fills = run(flat_books(), [Trade(5 * SEC, "U", 100.1, 60), Trade(6 * SEC, "U", 100.1, 45)], both).fills
+    assert [(f.side, f.size, f.kind) for f in fills] == [(SELL, 5, "queue")]
+    # 向きが分かっている約定の扱いは変わらない: 売り値以上で成立した「売り手主導」は売り指値に当てない
+    assert one(Trade(5 * SEC, "A", 100.2, 4)) == []
+    res = run(flat_books(), [Trade(5 * SEC, "U", 99.8, 3)], both)
+    assert res.market_volume_usd == pytest.approx(99.8 * 3)  # 1 件として数える
+
+
+def test_output_uses_venue_currency_and_warns_about_spot_shorting():
+    res = simulate(coarse_books(), [Trade(2 * SEC, "B", 11161.0, 0.4), Trade(12 * SEC, "A", 11158.0, 0.1)],
+                   lambda ctx: Quote(bid=11159.0, bid_size=1, ask=11160.0, ask_size=1), {}, instrument=SOL_SPOT, latency_ms=0)
+    assert [(f.side, f.size) for f in res.fills] == [(SELL, 0.4), (BUY, 0.1)]
+    text = format_result("SOL", res, {}, maker_rate=-0.0003, taker_rate=0.0009, latency_ms=0, trade_gaps=0, instrument=SOL_SPOT)
+    assert "損益 (JPY)" in text and "代金 ¥5,580" in text and "$" not in text and "メイカー手数料 -3.00 bps" in text
+    assert "現物なので" in text and "在庫を 0 より下に押し下げた売りが 1 件 (¥4,464)" in text
+    lev = dataclasses.replace(SOL_SPOT, coin="SOL_JPY", can_short=True)
+    assert "現物なので" not in format_result("SOL_JPY", res, {}, maker_rate=0, taker_rate=0, latency_ms=0, trade_gaps=0, instrument=lev)
+    usd = format_result("INJ", res, {}, maker_rate=0.00015, taker_rate=0.00045, latency_ms=0, trade_gaps=0)
+    assert "損益 (USD)" in usd and "代金 $5,580" in usd and "現物なので" not in usd  # 会場を渡さなければ今までどおり
+
+    # 金額のパラメータの既定値は建値の桁に合わせる (為替ではなく大まかな倍率)。bps などはそのまま
+    assert scale_defaults(BASELINE_PARAMS, "JPY") == {**BASELINE_PARAMS, "size_usd": 15_000.0, "max_inventory_usd": 75_000.0}
+    assert scale_defaults(BASELINE_PARAMS, "USD") == BASELINE_PARAMS
+
+
+async def test_paper_on_gmo_uses_per_coin_fees_and_matches_replay(tmp_path, capsys):
+    http = FakeDomestic()
+    db = tmp_path / "gmo.sqlite"
+    store = MmStore(db)
+    rec = Recorder(http, store, ["SOL", "ETH_JPY"], venue=Gmo(), min_gap=0, clock=lambda: http.time + 300, log=lambda m: None)
+    await rec.setup()
+    params = parse_params(scale_defaults(BASELINE_PARAMS, "JPY"), ["half_spread_bps=0.3"])
+    paper = Paper(store, ["SOL", "ETH_JPY"], "baseline", params, latency_ms=250, clock=lambda: http.time + 300, log=lambda m: None)
+    http.twins = True  # 約定の向きは分からない ("U")
+    rec.on_book, rec.on_trades = paper.on_book, paper.on_trades
+    rng = random.Random(9)
+    bid = 11159
+    for _ in range(120):
+        for _ in range(3):
+            bid += rng.choice([-2, -1, 0, 0, 1, 2])
+            http.book = (bid, bid + 1)
+            await rec.poll_books()
+            http.time += rng.randint(500, 2500)
+            for _ in range(rng.choice([0, 1, 3])):
+                buy = rng.random() < 0.5
+                http.trade(1, buy=buy, px=str(bid + (1 if buy else 0) + rng.choice([-1, 0, 0, 1])), sz=rng.choice(["0.5", "3", "30"]))
+        await rec.poll_trades()
+    paper.stop()
+    cfg = load_run(store)
+    assert (cfg.rate("SOL"), cfg.rate("ETH_JPY")) == (-0.0003, 0.0)  # 会場の値 (銘柄ごと) を run に残す
+    sol = run_result(store, paper.run, "SOL")
+    assert len(sol.fills) > 10 and {"queue", "through"} <= {f.kind for f in sol.fills}
+    assert sol.fee_pnl == pytest.approx(sol.volume_usd * 0.0003) and run_result(store, paper.run, "ETH_JPY").fee_pnl == 0
+    report = build_paper_report(store, taker_rate=0.0)
+    assert "SOL -3.00 ETH_JPY +0.00 bps" in report and "(JPY。" in report and "現物なので" in report and "$" not in report
+    assert await mm_main(["replay", "--db", str(db), "--run", str(paper.run)]) == 0
+    out = capsys.readouterr().out
+    assert out.count("突き合わせ: 一致") == 2 and "損益 (JPY)" in out
+    # 記録から読む再生も、手数料と金額の既定値を会場に合わせる。--fee-bps で上書きできる
+    assert await mm_main(["replay", "--db", str(db), "--coin", "SOL"]) == 0
+    out = capsys.readouterr().out
+    assert "size_usd=15000" in out and "メイカー手数料 -3.00 bps" in out and "現物なので" in out
+    assert await mm_main(["replay", "--db", str(db), "--coin", "SOL", "--fee-bps", "1"]) == 0
+    assert "メイカー手数料 +1.00 bps" in capsys.readouterr().out
+
+
+async def test_requests_are_spaced_on_venues_that_reject_bursts():
+    """GMO は、合計が少なくても続けて投げると ERR-5003 を返す (実測)。1 回ずつ間隔を空けて投げる"""
+    starts = []
+
+    class Timed(FakeDomestic):
+        async def request(self, method, url, headers=None, body=None):
+            starts.append(time.monotonic())
+            return await super().request(method, url, headers, body)
+
+    http = Timed()
+    assert Gmo.min_gap_sec > 0 and Bitbank.min_gap_sec > 0 and tbf.mm.venues.Hyperliquid.min_gap_sec == 0
+    rec = Recorder(http, MmStore(":memory:"), ["SOL", "ETH_JPY", "XRP_JPY"], venue=Gmo(), min_gap=0.03, log=lambda m: None)
+    await rec.poll_trades()
+    await rec.poll_books()
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    assert len(starts) == 6 and min(gaps) >= 0.029
