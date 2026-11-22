@@ -638,3 +638,203 @@ def test_quoter_state_is_per_simulation():
         a.step(book)
     b.step(flat_books(n=1)[0])
     assert (a.state["n"], b.state["n"]) == (5, 1)  # 銘柄 (Sim) ごとに別。実行し直せば空から
+
+
+# ---------------------------------------------------------------- クォーターの改善案 (vol_spread / lean / vol_lean / cooldown)
+
+from tbf.mm.quoter import (  # noqa: E402
+    COOLDOWN_PARAMS, FLOW_DELAY_MS, LEAN_PARAMS, VOL_LEAN_PARAMS, VOL_PARAMS,
+    book_imbalance, cooldown, lean, realized_vol_bps, trade_flow, vol_lean, vol_spread,
+)
+
+NEW_QUOTERS = {"vol_spread": VOL_PARAMS, "lean": LEAN_PARAMS, "vol_lean": VOL_LEAN_PARAMS, "cooldown": COOLDOWN_PARAMS}
+
+
+def walk_books(n, step_bps, *, dt=2 * SEC, start=0, mid=100.0, bid_sz=10.0, ask_sz=10.0):
+    """ミッドが毎回 ±step_bps ずつ交互に動く気配 (スプレッド 2 bps、2 段)。実現ボラが計算で分かる"""
+    out = []
+    for i in range(n):
+        m = mid * (1 + step_bps / 10_000 * (i % 2))
+        out.append(Book(start + i * dt, ((m * 0.9999, bid_sz), (m * 0.9998, 50.0)), ((m * 1.0001, ask_sz), (m * 1.0002, 50.0))))
+    return out
+
+
+def ctx_at(books, inventory=0.0, params=None, trades=(), state=None):
+    return Context(books[-1].time, books[-1], inventory, params, tuple(books), tuple(trades), {} if state is None else state)
+
+
+def test_new_quoters_are_registered_and_baseline_is_untouched():
+    assert BASELINE_PARAMS == {"half_spread_bps": 3.0, "size_usd": 100.0, "max_inventory_usd": 500.0, "skew_bps": 3.0}
+    assert QUOTERS["baseline"] == (baseline, BASELINE_PARAMS)
+    for name, params in NEW_QUOTERS.items():
+        assert QUOTERS[name][1] is params
+        added = set(params) - set(BASELINE_PARAMS)
+        assert set(BASELINE_PARAMS) < set(params) and {k: params[k] for k in BASELINE_PARAMS} == BASELINE_PARAMS
+        assert 1 <= len(added) <= (6 if name == "vol_lean" else 3), name  # 1 案あたり新しいパラメータは 3 個まで
+    assert set(VOL_LEAN_PARAMS) == set(VOL_PARAMS) | set(LEAN_PARAMS)  # 合わせた案に独自のパラメータは無い
+
+
+def test_realized_vol_needs_history_and_ignores_what_is_before_a_break():
+    books = walk_books(31, 2.0)  # 2 秒ごとに 2 bps -> 5 秒あたり 2 x sqrt(5 / 2)
+    assert realized_vol_bps(tuple(books[:1]), books[0].time, 60) is None
+    assert realized_vol_bps(tuple(books[:15]), books[14].time, 60) is None  # 28 秒ぶんしか無い (窓の半分に届かない)
+    assert realized_vol_bps(tuple(books[:16]), books[15].time, 60) == pytest.approx(2.0 * (5 / 2) ** 0.5, rel=1e-3)
+    assert realized_vol_bps(tuple(books), books[-1].time, 60) == pytest.approx(2.0 * (5 / 2) ** 0.5, rel=1e-3)
+    assert realized_vol_bps(tuple(walk_books(31, 0.0)), 60 * SEC, 60) == 0.0
+    # 記録の切れ目 (15 秒超) より前は使わない。切れ目の直後は「履歴が足りない」に戻る
+    later = walk_books(31, 2.0, start=books[-1].time + 20 * SEC)
+    assert realized_vol_bps(tuple(books + later[:5]), later[4].time, 60) is None
+    assert realized_vol_bps(tuple(books + later), later[-1].time, 60) is not None
+    # 切れ目をまたいだ値動きを 1 歩として数えない
+    jump = walk_books(31, 0.0, start=books[-1].time + 20 * SEC, mid=120.0)
+    assert realized_vol_bps(tuple(walk_books(31, 0.0) + jump), jump[-1].time, 100) == 0.0
+
+
+def test_vol_spread_waits_for_history_widens_when_rough_and_pauses_when_too_rough():
+    p = dict(VOL_PARAMS)
+    for q in (vol_spread, vol_lean):
+        pp = dict(VOL_LEAN_PARAMS) if q is vol_lean else p
+        assert q(ctx_at(walk_books(5, 1.0), 0, pp)) == Quote()  # 履歴が足りない間は出さない
+    calm, rough, wild = walk_books(40, 0.5), walk_books(40, 3.0), walk_books(40, 6.0)
+    vol = {k: realized_vol_bps(tuple(b), b[-1].time, 60) for k, b in (("calm", calm), ("rough", rough), ("wild", wild))}
+    assert vol["calm"] < p["half_spread_bps"] < vol["rough"] < p["vol_pause_bps"] < vol["wild"]
+
+    def half_bps(q):
+        return (q.ask - q.bid) / (q.ask + q.bid) * 10_000
+
+    q_calm, q_rough = vol_spread(ctx_at(calm, 0, p)), vol_spread(ctx_at(rough, 0, p))
+    assert half_bps(q_calm) == pytest.approx(p["half_spread_bps"], rel=1e-6)  # 静かなら baseline と同じ幅
+    assert (q_calm.bid, q_calm.ask) == pytest.approx((baseline(Context.of(calm[-1], 0, BASELINE_PARAMS)).bid,
+                                                     baseline(Context.of(calm[-1], 0, BASELINE_PARAMS)).ask))
+    assert half_bps(q_rough) == pytest.approx(vol["rough"], rel=1e-6) and half_bps(q_rough) > half_bps(q_calm)
+    assert half_bps(vol_spread(ctx_at(rough, 0, {**p, "vol_mult": 2.0}))) == pytest.approx(2 * vol["rough"], rel=1e-6)
+    assert half_bps(vol_spread(ctx_at(rough, 0, {**p, "vol_mult": 0.0}))) == pytest.approx(p["half_spread_bps"], rel=1e-6)
+    # 荒すぎるときは在庫を増やす側を出さない。在庫を減らす側だけ残す
+    stopped = vol_spread(ctx_at(wild, 0, p))
+    assert stopped.bid is None and stopped.ask is None
+    long, short = vol_spread(ctx_at(wild, 1.0, p)), vol_spread(ctx_at(wild, -1.0, p))
+    assert long.bid is None and long.ask is not None and short.ask is None and short.bid is not None
+    both = vol_spread(ctx_at(wild, 0, {**p, "vol_pause_bps": 0.0}))  # 0 なら止めない
+    assert both.bid is not None and both.ask is not None
+
+
+def test_lean_moves_the_center_toward_the_thick_side_and_the_aggressor_side():
+    p = {**LEAN_PARAMS, "imb_bps": 2.0, "flow_bps": 1.0, "one_side_bps": 0.0}
+    flat = walk_books(3, 0.0)
+    even = lean(ctx_at(flat, 0, p))
+    base = baseline(Context.of(flat[-1], 0, BASELINE_PARAMS))
+    assert (even.bid, even.ask) == pytest.approx((base.bid, base.ask))  # 偏りが無ければ baseline と同じ
+
+    bid_heavy, ask_heavy = walk_books(3, 0.0, bid_sz=30.0, ask_sz=10.0), walk_books(3, 0.0, bid_sz=10.0, ask_sz=30.0)
+    assert book_imbalance(bid_heavy[-1]) == pytest.approx(0.5) and book_imbalance(ask_heavy[-1]) == pytest.approx(-0.5)
+    assert book_imbalance(bid_heavy[-1], levels=2) == pytest.approx(20 / 140)
+    up, down = lean(ctx_at(bid_heavy, 0, p)), lean(ctx_at(ask_heavy, 0, p))
+    assert up.bid == pytest.approx(even.bid * 1.0001) and up.ask == pytest.approx(even.ask * 1.0001)  # 買いが厚い -> 上へ 1 bps
+    assert down.bid == pytest.approx(even.bid * 0.9999) and down.ask == pytest.approx(even.ask * 0.9999)
+
+    now = flat[-1].time
+    buys = [Trade(now - 30 * SEC, "B", 100.0, 3.0), Trade(now - 20 * SEC, "A", 100.0, 1.0)]
+    assert trade_flow(tuple(buys), now) == pytest.approx(0.5)
+    assert trade_flow((), now) == 0.0  # 約定の履歴が無い間はどちらにも寄せない
+    assert lean(ctx_at(flat, 0, p, trades=buys)).bid == pytest.approx(even.bid * 1.00005)  # 買い手主導が多い -> 上へ
+    sells = [Trade(t.time, "A" if t.side == "B" else "B", t.px, t.sz) for t in buys]
+    assert lean(ctx_at(flat, 0, p, trades=sells)).bid == pytest.approx(even.bid * 0.99995)
+    # 直前の約定 (届くのが間に合わないはずのもの) と、窓より古い約定は数えない
+    fresh = buys + [Trade(now - FLOW_DELAY_MS + 1, "A", 100.0, 500.0), Trade(now, "A", 100.0, 500.0)]
+    old = [Trade(now - 61 * SEC, "A", 100.0, 500.0)] + buys
+    assert trade_flow(tuple(fresh), now) == trade_flow(tuple(old), now) == pytest.approx(0.5)
+    assert trade_flow(tuple(buys + [Trade(now - FLOW_DELAY_MS, "A", 100.0, 2.0)]), now) == pytest.approx(0.0)
+
+    # 偏りが強いとき、踏まれる側 (上がりそうなら売り) は出さない
+    one = {**p, "one_side_bps": 1.0}
+    assert lean(ctx_at(bid_heavy, 0, one)).ask is None and lean(ctx_at(bid_heavy, 0, one)).bid == pytest.approx(up.bid)
+    assert lean(ctx_at(ask_heavy, 0, one)).bid is None and lean(ctx_at(ask_heavy, 0, one)).ask == pytest.approx(down.ask)
+    weak = lean(ctx_at(bid_heavy, 0, {**one, "imb_bps": 1.0}))  # 0.5 bps しかずれない -> 両側
+    assert weak.bid is not None and weak.ask is not None
+
+    # 合わせた案: 幅は荒さ、真ん中は偏り
+    rough = walk_books(40, 3.0, bid_sz=30.0, ask_sz=10.0)
+    vp = {**VOL_LEAN_PARAMS, "imb_bps": 2.0, "flow_bps": 0.0, "one_side_bps": 0.0}
+    both, wide = vol_lean(ctx_at(rough, 0, vp)), vol_spread(ctx_at(rough, 0, VOL_PARAMS))
+    assert both.bid == pytest.approx(wide.bid * 1.0001) and both.ask == pytest.approx(wide.ask * 1.0001)
+
+
+@pytest.mark.parametrize("name", sorted(NEW_QUOTERS))
+def test_new_quoters_keep_the_inventory_rules_of_baseline(name):
+    fn, params = QUOTERS[name]
+    books = walk_books(40, 0.5)
+    mid = books[-1].mid
+    flat = fn(ctx_at(books, 0, params))
+    assert flat.bid < mid < flat.ask and flat.bid_size == flat.ask_size == pytest.approx(params["size_usd"] / mid)
+    cap = params["max_inventory_usd"] / mid
+    long, short = fn(ctx_at(books, cap, params)), fn(ctx_at(books, -cap, params))
+    assert long.bid is None and long.ask is not None  # 上限。増やす側は出さない
+    assert short.ask is None and short.bid is not None
+    half = fn(ctx_at(books, cap / 2, params))  # 買い越しなら両方の値段を下げる (baseline と同じ幅だけ)
+    assert half.bid == pytest.approx(flat.bid * (1 - params["skew_bps"] / 2 / 10_000))
+    assert half.ask == pytest.approx(flat.ask * (1 - params["skew_bps"] / 2 / 10_000))
+
+
+def test_cooldown_rests_the_side_that_just_filled():
+    p, state = {**COOLDOWN_PARAMS, "cooldown_sec": 10.0}, {}
+    books = walk_books(12, 0.0)
+
+    def at(i, inventory):
+        return cooldown(Context(books[i].time, books[i], inventory, p, tuple(books[: i + 1]), (), state))
+
+    first = at(0, 0.0)
+    base = baseline(Context.of(books[0], 0, BASELINE_PARAMS))
+    assert (first.bid, first.ask) == pytest.approx((base.bid, base.ask))  # 約定が無い間は baseline と同じ
+    bought = at(1, 0.5)  # t=2 秒に買いが約定していた -> 12 秒まで買いを休む
+    assert bought.bid is None and bought.ask is not None
+    assert at(5, 0.5).bid is None  # 10 秒
+    assert at(6, 0.5).bid is not None  # 12 秒
+    sold = at(7, 0.0)  # 売りが約定 -> 今度は売りを休む
+    assert sold.ask is None and sold.bid is not None
+    assert at(11, 0.0).ask is None and cooldown(Context(30 * SEC, books[-1], 0.0, p, (books[-1],), (), state)).ask is not None
+
+    # 再生の中でも: 買いが約定したら、次の買い指値は 10 秒たつまで出ない
+    flat = [Book(i * 2 * SEC, ((99.99, 100.0),), ((100.01, 100.0),)) for i in range(12)]
+    trades = [Trade(1 * SEC, "A", 99.9, 5.0), Trade(5 * SEC, "A", 99.9, 5.0), Trade(15 * SEC, "A", 99.9, 5.0)]
+    res = simulate(flat, trades, cooldown, p, sz_decimals=2, latency_ms=0)
+    assert [(f.time, f.side) for f in res.fills] == [(1 * SEC, BUY), (15 * SEC, BUY)]
+    assert len(simulate(flat, trades, baseline, BASELINE_PARAMS, sz_decimals=2, latency_ms=0).fills) == 3
+
+
+@pytest.mark.parametrize("name", sorted(NEW_QUOTERS))
+def test_new_quoters_do_not_change_past_decisions_when_the_future_changes(name):
+    fn, params = QUOTERS[name]
+    rng = random.Random(7)
+    mid, books = 100.0, []
+    for i in range(300):
+        mid *= 1 + rng.gauss(0, 1.5) / 10_000
+        books.append(Book(i * 2 * SEC, ((round(mid * 0.9999, 4), rng.uniform(1, 9)), (round(mid * 0.9997, 4), 20.0)),
+                          ((round(mid * 1.0001, 4), rng.uniform(1, 9)), (round(mid * 1.0003, 4), 20.0))))
+    trades = []
+    for i in range(400):
+        t = rng.randint(1, 599_000)
+        b = books[t // (2 * SEC)]
+        side = rng.choice("AB")
+        trades.append(Trade(t, side, round((b.best_bid if side == "A" else b.best_ask) * (1 + rng.gauss(0, 2) / 10_000), 4), rng.uniform(0.5, 3), tid=i))
+    cut = 300 * SEC
+
+    def record(log):
+        def wrapped(ctx):
+            q = fn(ctx)
+            log.append((ctx.now, q))
+            return q
+        return wrapped
+
+    a_log, b_log = [], []
+    a = simulate(books, trades, record(a_log), params, sz_decimals=1, latency_ms=250)
+    crash = [Book(b.time, ((50.0, 10.0), (49.9, 1.0)), ((50.2, 1.0), (50.3, 9.0))) if b.time > cut else b for b in books]
+    future = [Trade(t.time, "B", 50.2, 99.0, tid=t.tid) for t in trades if t.time > cut]
+    b = simulate(crash, [t for t in trades if t.time <= cut] + future, record(b_log), params, sz_decimals=1, latency_ms=250)
+    past = [x for x in a_log if x[0] <= cut]
+    assert past == [x for x in b_log if x[0] <= cut] and len(past) == 151
+    assert [f for f in a.fills if f.time <= cut] == [f for f in b.fills if f.time <= cut] != []
+    assert a_log != b_log  # 先のデータが違えば、その後の判断は変わる (= 履歴を実際に見ている)
+    assert any(q.bid is not None for _, q in past) and any(q.ask is not None for _, q in past)
+    # 同じ記録なら何度流しても同じ (state が実行をまたいで残らない)
+    again = simulate(books, trades, fn, params, sz_decimals=1, latency_ms=250)
+    assert again.fills == a.fills and again.total_pnl == a.total_pnl

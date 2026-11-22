@@ -110,7 +110,197 @@ def baseline(ctx: Context) -> Quote:
     )
 
 
-QUOTERS: dict[str, tuple[Quoter, dict[str, float]]] = {"baseline": (baseline, BASELINE_PARAMS)}
+# ---------------------------------------------------------------------------------------------
+# 改善案 (一次評価のための候補。採否は決まっていない)。
+#
+# どれも在庫の扱い (在庫に比例して値段をずらす・上限で片側を止める) は baseline と同じで、変えるのは
+# 「真ん中をどこに置くか」「幅をどうするか」「どの側を出さないか」だけ。比べやすいように 1 案 1 仕掛けにしてある。
+# 下の「決め打ち」の定数は、名前のとおり固定で使っている作りの一部 (スイープしていない)。
+# 既定値はすべて出発点で、採用の判断に使った値ではない。
+
+#: 荒さを測るときの決め打ち。実現ボラは「この秒数のあいだにミッドが動く幅 (1σ、bps)」に直して返す。
+#: 5 秒は、逆選択を測る一番短い時間 (replay の --horizons の既定) に合わせただけ
+VOL_HORIZON_SEC = 5.0
+#: 気配の間がこれより空いていたら記録の切れ目とみなし、それより前は荒さの計算に使わない
+VOL_MAX_STEP_MS = 15_000
+#: 窓のうちこの割合より短い時間しか気配が続いていなければ「履歴が足りない」(= 出さない)
+VOL_MIN_COVERAGE = 0.5
+#: 板の偏りを見る段数。最良気配の 1 段だけ。1 / 3 / 5 / 10 段を前半の記録 (27 分) で比べ、5 秒先のミッドの動きと
+#: 3 銘柄とも同じ向きだったのが 1 段だけだったので 1 にした (相関は 0.06〜0.15 と弱い)。合わせ込みの余地がある値
+IMB_LEVELS = 1
+#: 約定の売り買いの偏りを見る窓 (秒)
+FLOW_WINDOW_SEC = 60.0
+#: 直前のこの時間の約定は偏りの計算に使わない。ctx.trades には now ちょうどの約定まで入るが、
+#: 実際の bot には届くのに時間がかかるので、直前の約定に頼ると実際より良く見える (docs/mm.md)
+FLOW_DELAY_MS = 500
+
+
+def realized_vol_bps(books: tuple[Book, ...], now: int, window_sec: float) -> Optional[float]:
+    """直近 window_sec 秒の実現ボラ。VOL_HORIZON_SEC 秒あたりのミッドの動き (1σ、bps) に直して返す。
+    気配の間隔はまちまち (1.5〜3 秒) なので、2 乗和を経過時間で割ってから直す。
+    記録の切れ目より前は使わない。続いている時間が窓の VOL_MIN_COVERAGE に満たなければ None (履歴が足りない)"""
+    start = now - window_sec * 1000
+    sumsq = 0.0
+    covered = 0
+    newer: Optional[Book] = None
+    for b in reversed(books):
+        if b.time > now:
+            continue
+        if b.time < start:
+            break
+        if newer is not None:
+            dt = newer.time - b.time
+            if dt > VOL_MAX_STEP_MS:
+                break
+            if dt > 0:
+                move = (newer.mid / b.mid - 1) * 10_000
+                sumsq += move * move
+                covered += dt
+        newer = b
+    if covered <= 0 or covered < window_sec * 1000 * VOL_MIN_COVERAGE:
+        return None
+    return (sumsq / covered * VOL_HORIZON_SEC * 1000) ** 0.5
+
+
+def book_imbalance(book: Book, levels: int = IMB_LEVELS) -> float:
+    """板の厚さの偏り。上位 levels 段の (買い − 売り) / (買い + 売り)。+1 = 買いだけが厚い、−1 = 売りだけが厚い"""
+    bid = sum(sz for _, sz in book.bids[:levels])
+    ask = sum(sz for _, sz in book.asks[:levels])
+    return (bid - ask) / (bid + ask) if bid + ask > 0 else 0.0
+
+
+def trade_flow(trades: tuple[Trade, ...], now: int, window_sec: float = FLOW_WINDOW_SEC) -> float:
+    """約定の売り買いの偏り。直近 window_sec 秒の (買い手主導 − 売り手主導) / 合計 (代金)。+1 = 買いばかり。
+    直前 FLOW_DELAY_MS の約定は使わない。約定が 1 件も無ければ 0 (どちらにも寄せない)。
+    約定の記録には抜けがあり、件数も少ない (1 分に数件) ので、1 件だけで ±1 になることがある"""
+    newest, oldest = now - FLOW_DELAY_MS, now - window_sec * 1000
+    buy = sell = 0.0
+    for t in reversed(trades):
+        if t.time > newest:
+            continue
+        if t.time < oldest:
+            break
+        if t.side == "B":
+            buy += t.px * t.sz
+        else:
+            sell += t.px * t.sz
+    return (buy - sell) / (buy + sell) if buy + sell > 0 else 0.0
+
+
+def _quote_around(ctx: Context, center: float, half_bps: float, *, bid_ok: bool = True, ask_ok: bool = True) -> Quote:
+    """center ± half_bps に出す。在庫の扱いは baseline と同じ (在庫に比例してずらす・上限で増やす側を止める)。
+    center = ミッド、half_bps = half_spread_bps なら baseline と同じ指値になる"""
+    params, mid = ctx.params, ctx.book.mid
+    inv_usd = ctx.inventory * mid
+    cap = params["max_inventory_usd"]
+    center = center * (1 - params["skew_bps"] / 10_000 * (inv_usd / cap if cap > 0 else 0.0))
+    half = half_bps / 10_000
+    size = params["size_usd"] / mid
+    return Quote(
+        bid=center * (1 - half) if bid_ok and inv_usd < cap else None,
+        bid_size=size,
+        ask=center * (1 + half) if ask_ok and inv_usd > -cap else None,
+        ask_size=size,
+    )
+
+
+def _vol_half(ctx: Context) -> tuple[Optional[float], bool]:
+    """(幅 bps, 新しく在庫を増やしてよいか)。履歴が足りない間は (None, False)"""
+    params = ctx.params
+    vol = realized_vol_bps(ctx.books, ctx.now, params["vol_window_sec"])
+    if vol is None:
+        return None, False
+    calm = not (params["vol_pause_bps"] > 0 and vol > params["vol_pause_bps"])
+    return max(params["half_spread_bps"], params["vol_mult"] * vol), calm
+
+
+def _lean_bps(ctx: Context) -> float:
+    """真ん中をずらす幅 (bps)。正 = 上がりそう (買いが厚い・買い手主導が多い) なので、両方の値段を上げる"""
+    params = ctx.params
+    return params["imb_bps"] * book_imbalance(ctx.book) + params["flow_bps"] * trade_flow(ctx.trades, ctx.now)
+
+
+def _vol_lean(ctx: Context, *, use_vol: bool, use_lean: bool) -> Quote:
+    params, mid = ctx.params, ctx.book.mid
+    half, bid_ok, ask_ok = params["half_spread_bps"], True, True
+    if use_vol:
+        vol_half, calm = _vol_half(ctx)
+        if vol_half is None:
+            return Quote()  # 履歴が足りない間は出さない
+        half = vol_half
+        if not calm:  # 荒すぎる。在庫を減らす側だけ残す (在庫を抱えたまま両方を引くと、出口が無くなる)
+            bid_ok, ask_ok = ctx.inventory < 0, ctx.inventory > 0
+    center = mid
+    if use_lean:
+        lean = _lean_bps(ctx)
+        center = mid * (1 + lean / 10_000)
+        if params["one_side_bps"] > 0:  # 偏りが強いとき、踏まれる側 (上がりそうなら売り) は出さない
+            ask_ok = ask_ok and lean < params["one_side_bps"]
+            bid_ok = bid_ok and lean > -params["one_side_bps"]
+    return _quote_around(ctx, center, half, bid_ok=bid_ok, ask_ok=ask_ok)
+
+
+#: 既定値は出発点で、採用の判断に使った値ではない (baseline と同じ扱い)
+VOL_PARAMS: dict[str, float] = {
+    **BASELINE_PARAMS,
+    "vol_window_sec": 60.0,  # 荒さを測る窓
+    "vol_mult": 1.0,  # 幅 = max(half_spread_bps, vol_mult x 直近の実現ボラ (5 秒あたり bps))。0 なら広げない
+    "vol_pause_bps": 6.0,  # 実現ボラがこれを超えたら、在庫を増やす側は出さない。0 以下なら止めない
+}
+LEAN_PARAMS: dict[str, float] = {
+    **BASELINE_PARAMS,
+    "imb_bps": 1.0,  # 板の偏りが ±1 のとき、真ん中をずらす幅
+    "flow_bps": 0.5,  # 約定の偏りが ±1 のとき、真ん中をずらす幅
+    "one_side_bps": 1.0,  # ずらす幅の合計がこれ以上なら、踏まれる側は出さない。0 以下なら両側とも出す
+}
+VOL_LEAN_PARAMS: dict[str, float] = {**VOL_PARAMS, **{k: LEAN_PARAMS[k] for k in ("imb_bps", "flow_bps", "one_side_bps")}}
+COOLDOWN_PARAMS: dict[str, float] = {
+    **BASELINE_PARAMS,
+    "cooldown_sec": 10.0,  # 約定した側を、この秒数は出さない
+}
+
+
+def vol_spread(ctx: Context) -> Quote:
+    """荒さで幅を変える: 幅 = max(half_spread_bps, vol_mult x 直近 vol_window_sec 秒の実現ボラ)。
+    実現ボラが vol_pause_bps を超えたら、在庫を増やす側は出さない。真ん中はミッド (baseline と同じ)。
+    履歴が窓の半分に満たない間 (実行の最初、記録の切れ目の直後) は出さない"""
+    return _vol_lean(ctx, use_vol=True, use_lean=False)
+
+
+def lean(ctx: Context) -> Quote:
+    """真ん中をずらす: ミッドから imb_bps x 板の偏り + flow_bps x 約定の偏り だけ動かす (幅は固定)。
+    ずれが one_side_bps 以上なら、踏まれる側は出さない。約定の履歴が無い間は板の偏りだけで動く"""
+    return _vol_lean(ctx, use_vol=False, use_lean=True)
+
+
+def vol_lean(ctx: Context) -> Quote:
+    """vol_spread と lean を合わせたもの (幅は荒さで、真ん中は偏りで)"""
+    return _vol_lean(ctx, use_vol=True, use_lean=True)
+
+
+def cooldown(ctx: Context) -> Quote:
+    """約定した側をしばらく休む: 買いが約定したら cooldown_sec 秒は買いを出さない (売りも同じ)。ほかは baseline と同じ。
+    同じ向きに続けて拾われて在庫が積み上がるのを抑える狙い。約定は、前に呼ばれたときからの在庫の変化で知る (state)"""
+    st, now = ctx.state, ctx.now
+    last = st.get("inventory", ctx.inventory)
+    if ctx.inventory > last + 1e-12:
+        st["bid_until"] = now + ctx.params["cooldown_sec"] * 1000
+    elif ctx.inventory < last - 1e-12:
+        st["ask_until"] = now + ctx.params["cooldown_sec"] * 1000
+    st["inventory"] = ctx.inventory
+    return _quote_around(
+        ctx, ctx.book.mid, ctx.params["half_spread_bps"],
+        bid_ok=now >= st.get("bid_until", 0), ask_ok=now >= st.get("ask_until", 0),
+    )
+
+
+QUOTERS: dict[str, tuple[Quoter, dict[str, float]]] = {
+    "baseline": (baseline, BASELINE_PARAMS),
+    "vol_spread": (vol_spread, VOL_PARAMS),
+    "lean": (lean, LEAN_PARAMS),
+    "vol_lean": (vol_lean, VOL_LEAN_PARAMS),
+    "cooldown": (cooldown, COOLDOWN_PARAMS),
+}
 
 
 def parse_params(defaults: dict[str, float], overrides: list[str]) -> dict[str, float]:
