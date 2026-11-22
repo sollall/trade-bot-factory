@@ -6,9 +6,9 @@ import pytest
 
 import tbf.http
 from tbf.mm.book import Book, Trade, price_decimals, round_down, round_up
-from tbf.mm.quoter import BASELINE_PARAMS, Quote, baseline, parse_params
+from tbf.mm.quoter import BASELINE_PARAMS, HISTORY_SEC, Context, Quote, baseline, parse_params
 from tbf.mm.recorder import WEIGHT_LIMIT_PER_MIN, Recorder, check_budget, weight_per_min
-from tbf.mm.replay import BUY, SELL, format_result, simulate
+from tbf.mm.replay import BUY, SELL, Sim, format_result, simulate
 from tbf.mm.report import build_report
 from tbf.mm.store import MmStore
 
@@ -152,7 +152,7 @@ def flat_books(n=4, bid=99.9, ask=100.1, sz=100.0, step=10 * SEC):
 
 
 def fixed(bid=None, ask=None, size=10.0):
-    return lambda book, inventory, params: Quote(bid, size, ask, size)
+    return lambda ctx: Quote(bid, size, ask, size)
 
 
 def run(books, trades, quoter, **kw):
@@ -218,8 +218,8 @@ def test_requote_goes_to_back_of_queue():
     assert [f.size for f in run(books, trades, fixed(bid=99.9)).fills] == [10]
 
     # 途中で 1 回値段を変えて戻すと最後尾 (前に 100) からやり直し。50 では届かない
-    def moving(book, inventory, params):
-        return Quote(bid=99.8 if book.time == 10 * SEC else 99.9, bid_size=10)
+    def moving(ctx):
+        return Quote(bid=99.8 if ctx.now == 10 * SEC else 99.9, bid_size=10)
 
     res = run(books, trades, moving)
     assert res.fills == []
@@ -252,7 +252,7 @@ def test_pnl_breakdown_adds_up():
     # 手で追える例: ミッド 100 のとき 99.9 で 10 枚買い、ミッドが 99 に下がる
     books = [Book(0, ((99.9, 100),), ((100.1, 100),)), Book(10 * SEC, ((99.9, 100),), ((100.1, 100),)),
              Book(20 * SEC, ((98.9, 100),), ((99.1, 100),))]
-    once = lambda book, inventory, params: Quote(bid=99.9 if inventory == 0 else None, bid_size=10)  # noqa: E731
+    once = lambda ctx: Quote(bid=99.9 if ctx.inventory == 0 else None, bid_size=10)  # noqa: E731
     res = run(books, [Trade(5 * SEC, "A", 99.8, 10)], once, maker_rate=0.00015)
     assert len(res.fills) == 1 and res.spread_pnl == pytest.approx(1.0)  # (100 - 99.9) * 10
     assert res.fee_pnl == pytest.approx(-99.9 * 10 * 0.00015)
@@ -292,9 +292,9 @@ def test_no_lookahead():
              Book(20 * SEC, ((100.9, 100),), ((101.1, 100),))]
     seen = []
 
-    def follow(book, inventory, params):
-        seen.append(book.time)
-        return Quote(bid=book.best_bid, bid_size=10)
+    def follow(ctx):
+        seen.append(ctx.now)
+        return Quote(bid=ctx.book.best_bid, bid_size=10)
 
     # 9 秒の時点の売り 100.5 は、まだ 99.9 の指値にしか出会わない。10 秒の気配で決めた 100.9 には当てない
     res = run(books, [Trade(9 * SEC, "A", 100.5, 50)], follow)
@@ -345,13 +345,13 @@ def test_recording_break_cancels_quotes():
 def test_baseline_quoter_skews_and_stops_at_inventory_limit():
     book = Book(0, ((99.9, 100),), ((100.1, 100),))
     p = parse_params(BASELINE_PARAMS, ["half_spread_bps=5", "skew_bps=4", "max_inventory_usd=1000", "size_usd=200"])
-    flat = baseline(book, 0, p)
+    flat = baseline(Context.of(book, 0, p))
     assert (flat.bid, flat.ask) == (pytest.approx(99.95), pytest.approx(100.05))
     assert flat.bid_size == flat.ask_size == pytest.approx(2.0)
-    long = baseline(book, 5, p)  # 500 ドルの買い越し = 上限の半分 -> 両方の値段を 2 bps 下げる
+    long = baseline(Context.of(book, 5, p))  # 500 ドルの買い越し = 上限の半分 -> 両方の値段を 2 bps 下げる
     assert long.bid == pytest.approx(99.95 * (1 - 0.0002)) and long.ask == pytest.approx(100.05 * (1 - 0.0002))
-    assert baseline(book, 10, p).bid is None and baseline(book, 10, p).ask is not None  # 上限。買いは出さない
-    assert baseline(book, -10, p).ask is None and baseline(book, -10, p).bid is not None
+    assert baseline(Context.of(book, 10, p)).bid is None and baseline(Context.of(book, 10, p)).ask is not None  # 上限。買いは出さない
+    assert baseline(Context.of(book, -10, p)).ask is None and baseline(Context.of(book, -10, p)).bid is not None
     with pytest.raises(ValueError, match="half_spread"):
         parse_params(BASELINE_PARAMS, ["half_spred_bps=5"])  # 打ち間違いは黙って無視しない
 
@@ -386,7 +386,7 @@ from tbf.mm.quoter import QUOTERS  # noqa: E402
 PAPER_PARAMS = {**BASELINE_PARAMS, "half_spread_bps": 2.0}
 
 
-async def run_paper(tmp_path, seed, cycles, store=None, **kw):
+async def run_paper(tmp_path, seed, cycles, store=None, quoter="baseline", params=PAPER_PARAMS, **kw):
     """乱数の相場でポーリングを回す。気配は約定より細かく取り、ときどき 10 件を超える約定を出す"""
     rng = random.Random(seed)
     hl = FakeHyperliquid()
@@ -394,7 +394,7 @@ async def run_paper(tmp_path, seed, cycles, store=None, **kw):
     store = store or MmStore(tmp_path / "mm.sqlite")
     rec = Recorder(hl, store, ["INJ"], clock=lambda: hl.time + 300, log=lambda m: None)
     await rec.setup()
-    paper = Paper(store, ["INJ"], "baseline", PAPER_PARAMS, maker_rate=0.00015, latency_ms=250,
+    paper = Paper(store, ["INJ"], quoter, params, maker_rate=0.00015, latency_ms=250,
                   clock=lambda: hl.time + 300, log=lambda m: None, **kw)
     rec.on_book, rec.on_trades = paper.on_book, paper.on_trades
     bid = 5.8908
@@ -520,7 +520,7 @@ def test_paper_waits_for_trades_and_counts_what_arrives_too_late(tmp_path):
 
 
 async def test_paper_failure_stops_paper_but_not_recording(tmp_path):
-    def boom(book, inventory, params):
+    def boom(ctx):
         raise RuntimeError("quoter bug")
 
     hl = FakeHyperliquid()
@@ -541,3 +541,100 @@ async def test_paper_failure_stops_paper_but_not_recording(tmp_path):
     assert "INJ" in paper.broken and any("paper を止めました" in m for m in logs)
     assert len(store.books("INJ")) == 3 and len(store.trades("INJ")) == 6  # 記録は欠けない
     assert store.query("SELECT COUNT(*) FROM polls WHERE error IS NOT NULL")[0][0] == 0
+
+
+# ---------------------------------------------------------------- クォーターに渡る履歴と state
+
+
+def history_quoter(ctx):
+    """テスト用の最小のクォーター (戦略ではない)。履歴と state を全部使う:
+    直近 30 秒のミッドの振れで幅を広げ、約定の売り買いの偏りと板の厚さの偏りで真ん中をずらす"""
+    st = ctx.state
+    st["calls"] = st.get("calls", 0) + 1
+    st["ema"] = ctx.book.mid if "ema" not in st else st["ema"] * 0.9 + ctx.book.mid * 0.1
+    mids = [b.mid for b in ctx.books if b.time >= ctx.now - 30_000]
+    swing_bps = (max(mids) - min(mids)) / ctx.book.mid * 10_000
+    recent = [t for t in ctx.trades if t.time >= ctx.now - 60_000]
+    flow = sum(t.sz if t.side == "B" else -t.sz for t in recent) / (sum(t.sz for t in recent) or 1.0)
+    bid_depth, ask_depth = sum(sz for _, sz in ctx.book.bids[:3]), sum(sz for _, sz in ctx.book.asks[:3])
+    lean = (bid_depth - ask_depth) / (bid_depth + ask_depth)
+    center = st["ema"] * (1 + (flow + lean) * 1e-4 - ctx.inventory * ctx.book.mid / 500 * 3e-4)
+    half = (ctx.params["half_spread_bps"] + 0.5 * swing_bps) / 10_000
+    size = 100 / ctx.book.mid
+    return Quote(center * (1 - half), size, center * (1 + half), size)
+
+
+async def test_paper_matches_replay_with_a_quoter_that_uses_history_and_state(tmp_path, monkeypatch):
+    monkeypatch.setitem(QUOTERS, "test_history", (history_quoter, {"half_spread_bps": 1.0}))
+    params = {"half_spread_bps": 1.0}
+    store, paper = await run_paper(tmp_path, seed=5, cycles=150, quoter="test_history", params=params)
+    live = run_result(store, paper.run, "INJ")
+    first, last = run_span(store, paper.run, "INJ")
+    replayed = simulate(store.books("INJ", first, last), store.trades("INJ", first, last), history_quoter, params,
+                        sz_decimals=1, latency_ms=250)
+    assert len(live.fills) > 20 and live.count(BUY) > 5 and live.count(SELL) > 5
+    assert fill_keys(live.fills) == fill_keys(replayed.fills)
+    for k in ("spread_pnl", "inventory_pnl", "fee_pnl", "total_pnl", "position", "placed", "canceled", "rejected"):
+        assert getattr(live, k) == pytest.approx(getattr(replayed, k), abs=1e-9), k
+    assert paper.sims["INJ"].state["calls"] > 300  # state は呼び出しをまたいで残る
+    # 履歴を使っていること自体の確認: 履歴を渡さなければ結果が変わる
+    blind = simulate(store.books("INJ", first, last), store.trades("INJ", first, last),
+                     lambda ctx: history_quoter(Context.of(ctx.book, ctx.inventory, ctx.params, state=ctx.state)),
+                     params, sz_decimals=1, latency_ms=250)
+    assert fill_keys(blind.fills) != fill_keys(replayed.fills)
+
+
+def test_quoter_never_sees_anything_after_the_decision():
+    rng = random.Random(11)
+    books = [Book(i * 3 * SEC, ((99.9, 10.0), (99.8, 10.0)), ((100.1, 10.0), (100.2, 10.0))) for i in range(400)]
+    trades = [Trade(rng.randint(-5000, 1_199_000), rng.choice("AB"), rng.choice([99.9, 100.1]), 2.0, tid=i) for i in range(900)]
+    by_time = sorted(trades, key=lambda t: t.time)
+    calls = []
+
+    def spy(ctx):
+        calls.append(ctx)
+        assert ctx.books[-1] is ctx.book and ctx.now == ctx.book.time
+        assert all(b.time <= ctx.now for b in ctx.books) and all(t.time <= ctx.now for t in ctx.trades)
+        assert [b.time for b in ctx.books] == sorted(b.time for b in ctx.books)
+        assert [t.time for t in ctx.trades] == sorted(t.time for t in ctx.trades)
+        return Quote(bid=99.9, bid_size=1, ask=100.1, ask_size=1)
+
+    # 遅れ 0 なら毎回の気配で呼ばれる。遅れが気配の間隔より長いと、指値が載るまで呼ばれない
+    simulate(books, trades, spy, {}, sz_decimals=1, latency_ms=0)
+    assert [c.now for c in calls] == [b.time for b in books]
+    for c in calls[1:]:
+        # 判断の時点までの約定は漏れなく入り (履歴の長さの範囲で)、それより後は 1 件も入らない。
+        # 最初の気配より前の約定は、paper でも再生でも渡さない
+        want = [t for t in by_time if max(0, c.now - HISTORY_SEC * 1000 - 1) < t.time <= c.now]
+        assert sorted(t.tid for t in c.trades) == sorted(t.tid for t in want)
+        want_books = [b for b in books if c.now - HISTORY_SEC * 1000 <= b.time <= c.now]
+        assert list(c.books) == want_books
+    assert calls[0].trades == () and calls[0].books == (books[0],)
+    assert max(len(c.books) for c in calls) == HISTORY_SEC // 3 + 1  # 長く回しても履歴は増え続けない
+    assert all(c.state is calls[0].state for c in calls)  # 同じ実行の中では同じ state
+
+    # 先のデータを書き換えても、それより前の判断に渡るものは変わらない
+    cut = 600 * SEC
+    before = [(c.now, c.books, c.trades, c.inventory) for c in calls if c.now <= cut]
+    calls.clear()
+    crash = [Book(b.time, ((50.0, 10.0),), ((50.2, 10.0),)) if b.time > cut else b for b in books]
+    simulate(crash, [t for t in trades if t.time <= cut], spy, {}, sz_decimals=1, latency_ms=0)
+    assert [(c.now, c.books, c.trades, c.inventory) for c in calls if c.now <= cut] == before
+
+    calls.clear()
+    simulate(books[:20], [], spy, {}, sz_decimals=1, latency_ms=7000)
+    assert [c.now for c in calls] == [b.time for b in books[:20:3]]  # 載った (7 秒後) 次の気配 (9 秒) でまた決める
+    assert len(calls[-1].books) == 19  # 呼ばれなかった間の気配も履歴には入っている
+
+
+def test_quoter_state_is_per_simulation():
+    def counting(ctx):
+        ctx.state["n"] = ctx.state.get("n", 0) + 1
+        return Quote()
+
+    a = Sim(counting, {}, sz_decimals=1, latency_ms=0)
+    b = Sim(counting, {}, sz_decimals=1, latency_ms=0)
+    for book in flat_books(n=5):
+        a.step(book)
+    b.step(flat_books(n=1)[0])
+    assert (a.state["n"], b.state["n"]) == (5, 1)  # 銘柄 (Sim) ごとに別。実行し直せば空から

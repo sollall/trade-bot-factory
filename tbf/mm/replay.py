@@ -4,7 +4,8 @@
 仮定は、実際より良く見えない側に倒してある。
 
 時間の扱い (先読みしない)
-  - 気配 k を見てクォーターが値段を決める。使えるのは気配 k と今の在庫だけ。
+  - 気配 k を見てクォーターが値段を決める。使えるのは気配 k 以前の気配と約定 (直近の履歴)、今の在庫、
+    クォーターが自分で持つ state だけ (tbf/mm/quoter.py の Context)。気配 k より後のものは渡さない。
   - 決めた指値が板に載るのは latency_ms 後。それまでは前の指値が残っている。
     次の指値がまだ載っていない間は、新しい判断をしない。
   - 取引所の時刻が気配 k+1 以前の約定は、気配 k+1 より先に、その時点で板に載っている指値に当てる
@@ -38,11 +39,12 @@ from __future__ import annotations
 
 import bisect
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
 
 from tbf.mm.book import Book, Trade, price_decimals, round_down, round_up, trade_order
-from tbf.mm.quoter import Quote, Quoter
+from tbf.mm.quoter import HISTORY_SEC, MAX_HISTORY, Context, Quote, Quoter
 
 BUY, SELL = 1, -1
 
@@ -169,6 +171,11 @@ class Sim:
         self.prev: Optional[Book] = None
         self.clock = 0
         self.mid = 0.0  # 直前の気配のミッド
+        # クォーターに渡す履歴と、クォーターが自由に使う入れ物。どちらもこの Sim (= 1 銘柄・1 回の実行) だけのもの
+        self.history_ms = HISTORY_SEC * 1000
+        self.book_history: deque[Book] = deque(maxlen=MAX_HISTORY)
+        self.trade_history: deque[Trade] = deque(maxlen=MAX_HISTORY)
+        self.state: dict = {}
 
     def _advance(self, t: int) -> None:
         r = self.res
@@ -268,8 +275,17 @@ class Sim:
         if prev is not None:
             r.inventory_pnl += r.position * (book.mid - self.mid)
             self.mid = book.mid
+        # 履歴に足すのは、この気配と、この気配以前の約定だけ (step の約束で trades は book.time 以前)。
+        # 記録の切れ目の間の約定は約定の判定には使わないが、見えていたものなので履歴には入れる
+        if prev is not None:
+            self.trade_history.extend(sorted((t for t in trades if prev.time < t.time <= book.time), key=trade_order))
+        self.book_history.append(book)
+        for h in (self.book_history, self.trade_history):
+            while h and h[0].time < book.time - self.history_ms:
+                h.popleft()
         if self.pending is None:
-            self.pending = (book.time + self.latency_ms, self.quoter(book, r.position, self.params), book)
+            ctx = Context(book.time, book, r.position, self.params, tuple(self.book_history), tuple(self.trade_history), self.state)
+            self.pending = (book.time + self.latency_ms, self.quoter(ctx), book)
             self._activate_due(book.time)
         self.prev = book
         r.last_mid = self.mid
