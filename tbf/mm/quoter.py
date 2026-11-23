@@ -296,12 +296,87 @@ def cooldown(ctx: Context) -> Quote:
     )
 
 
+# ---------------------------------------------------------------------------------------------
+# 国内 2 会場 (GMO コインのレバレッジ、bitbank の現物) の配信の記録から作った候補。採否は決まっていない。
+# どちらも「どの側を出さないか」を変えるだけで、値段の決め方は 1 つずつ。既定値は出発点で、採用の判断に使った値ではない。
+
+#: trade_pause が約定を見るとき、直前のこの時間の約定は「まだ届いていない」として使わない。
+#: 配信の約定が手元に届くまでの実測 (GMO コインで 90ms 前後。docs/mm.md) に合わせた決め打ち
+TRADE_PAUSE_DELAY_MS = 100
+
+TRADE_PAUSE_PARAMS: dict[str, float] = {
+    **BASELINE_PARAMS,
+    "pause_sec": 3.0,  # 成行が出たあと、その成行に食われる側をこの秒数は出さない。0 以下なら休まない (= baseline)
+}
+
+
+def trade_pause(ctx: Context) -> Quote:
+    """成行が出た直後は、食われる側を休む: 直近 pause_sec 秒に売り手主導の約定があれば買いを、買い手主導の約定があれば
+    売りを出さない (両方あれば両方)。ほかは baseline と同じ (値段も在庫の扱いも)。在庫を減らす側でも休む。
+
+    GMO のレバレッジの配信の記録で、baseline の約定のうち「直前 1 秒以内に同じ向きの成行が出ていたもの」(約定の 3 割前後) が、
+    ほかの約定より 5 秒後か 60 秒後の取り分が悪かったのを受けたもの。成行は続けて出る。cooldown は自分が約定したあとに休むが、これは市場の約定を見て休む。
+    直前 TRADE_PAUSE_DELAY_MS の約定は使わない。約定の向きが要るので、向きが分からない記録 (GMO のポーリング。side が "U") では
+    何も休まず baseline と同じになる。呼ばれるのは気配が進むときだけなので、成行を見てから引くまでに気配 1 回ぶん遅れる"""
+    params, now = ctx.params, ctx.now
+    newest, oldest = now - TRADE_PAUSE_DELAY_MS, now - params["pause_sec"] * 1000
+    bid_ok = ask_ok = True
+    for t in reversed(ctx.trades):
+        if t.time > newest:
+            continue
+        if t.time < oldest:
+            break
+        if t.side == "A":
+            bid_ok = False
+        elif t.side == "B":
+            ask_ok = False
+    return _quote_around(ctx, ctx.book.mid, params["half_spread_bps"], bid_ok=bid_ok, ask_ok=ask_ok)
+
+
+JOIN_PARAMS: dict[str, float] = {
+    "size_usd": BASELINE_PARAMS["size_usd"],  # 片側 1 本の大きさ
+    "max_inventory_usd": BASELINE_PARAMS["max_inventory_usd"],  # 在庫がこれ以上になったら、増やす側は出さない
+    "min_imb": -0.5,  # 自分の側から見た板の偏り (最良気配 1 段) がこれ未満なら並ばない。-1 なら常に並ぶ
+    "long_only": 0.0,  # 1 なら現物として動く: 売りは持っている分だけ (在庫 0 から売りで入らない)
+}
+
+
+def join(ctx: Context) -> Quote:
+    """最良気配に並ぶ: 買いは最良買いと同じ値段、売りは最良売りと同じ値段に出す (列の後ろに付く。内側には出さない)。
+    スプレッドが刻み 1 つに張り付いた板 (bitbank の主要な銘柄) のためのもの。ミッドからの幅も、在庫で値段をずらすことも無い
+    (刻み 1 つの板ではずらす先が無い)。在庫は「上限で増やす側を止める」だけで抑える。
+
+    並ぶのは自分の側の列が相手より薄すぎないときだけ: 板の偏り (買いが厚い = +) が、買いは min_imb 以上、売りは -min_imb 以下。
+    薄い側の列は食い尽くされやすく、そこで約定するとそのまま値段が飛ぶ (bitbank の記録で、並んだ約定の 5 秒後の取り分は
+    自分の側が薄いほど悪かった)。条件から外れたら指値を引くので、戻ったときは列の最後尾から並び直しになる。
+    履歴も state も使わない"""
+    book, params = ctx.book, ctx.params
+    mid = book.mid
+    inv_usd = ctx.inventory * mid
+    cap = params["max_inventory_usd"]
+    size = ask_size = params["size_usd"] / mid
+    imb = book_imbalance(book)
+    bid_ok = inv_usd < cap and imb >= params["min_imb"]
+    ask_ok = inv_usd > -cap and -imb >= params["min_imb"]
+    if params["long_only"] > 0:  # 現物: 持っている分より多くは売らない
+        ask_size = min(size, max(ctx.inventory, 0.0))
+        ask_ok = ask_ok and ask_size > 0
+    return Quote(
+        bid=book.best_bid if bid_ok else None,
+        bid_size=size,
+        ask=book.best_ask if ask_ok else None,
+        ask_size=ask_size,
+    )
+
+
 QUOTERS: dict[str, tuple[Quoter, dict[str, float]]] = {
     "baseline": (baseline, BASELINE_PARAMS),
     "vol_spread": (vol_spread, VOL_PARAMS),
     "lean": (lean, LEAN_PARAMS),
     "vol_lean": (vol_lean, VOL_LEAN_PARAMS),
     "cooldown": (cooldown, COOLDOWN_PARAMS),
+    "trade_pause": (trade_pause, TRADE_PAUSE_PARAMS),
+    "join": (join, JOIN_PARAMS),
 }
 
 

@@ -647,11 +647,13 @@ def test_quoter_state_is_per_simulation():
 # ---------------------------------------------------------------- クォーターの改善案 (vol_spread / lean / vol_lean / cooldown)
 
 from tbf.mm.quoter import (  # noqa: E402
-    COOLDOWN_PARAMS, FLOW_DELAY_MS, LEAN_PARAMS, VOL_LEAN_PARAMS, VOL_PARAMS,
-    book_imbalance, cooldown, lean, realized_vol_bps, trade_flow, vol_lean, vol_spread,
+    COOLDOWN_PARAMS, FLOW_DELAY_MS, JOIN_PARAMS, LEAN_PARAMS, TRADE_PAUSE_DELAY_MS, TRADE_PAUSE_PARAMS, VOL_LEAN_PARAMS, VOL_PARAMS,
+    book_imbalance, cooldown, join, lean, realized_vol_bps, trade_flow, trade_pause, vol_lean, vol_spread,
 )
 
-NEW_QUOTERS = {"vol_spread": VOL_PARAMS, "lean": LEAN_PARAMS, "vol_lean": VOL_LEAN_PARAMS, "cooldown": COOLDOWN_PARAMS}
+# baseline の在庫の扱いをそのまま使う案 (join は値段の決め方が違うので入れない。下に専用のテストがある)
+NEW_QUOTERS = {"vol_spread": VOL_PARAMS, "lean": LEAN_PARAMS, "vol_lean": VOL_LEAN_PARAMS, "cooldown": COOLDOWN_PARAMS,
+               "trade_pause": TRADE_PAUSE_PARAMS}
 
 
 def walk_books(n, step_bps, *, dt=2 * SEC, start=0, mid=100.0, bid_sz=10.0, ask_sz=10.0):
@@ -805,7 +807,7 @@ def test_cooldown_rests_the_side_that_just_filled():
     assert len(simulate(flat, trades, baseline, BASELINE_PARAMS, sz_decimals=2, latency_ms=0).fills) == 3
 
 
-@pytest.mark.parametrize("name", sorted(NEW_QUOTERS))
+@pytest.mark.parametrize("name", sorted(NEW_QUOTERS) + ["join"])
 def test_new_quoters_do_not_change_past_decisions_when_the_future_changes(name):
     fn, params = QUOTERS[name]
     rng = random.Random(7)
@@ -1139,6 +1141,101 @@ def test_coarse_tick_rounds_onto_best_quote_and_waits_in_queue():
     hl = simulate(coarse_books(), [Trade(2 * SEC, "A", 11159.0, 7.0), Trade(3 * SEC, "A", 11159.0, 0.75)], inside, {},
                   sz_decimals=2, latency_ms=0)
     assert [(f.px, f.size, f.kind) for f in hl.fills] == [(11159.0, 0.5, "queue")]
+
+
+# ---------------------------------------------------------------- 国内の会場向けの案 (trade_pause / join)
+
+
+def test_trade_pause_rests_the_side_a_market_order_just_hit():
+    assert QUOTERS["trade_pause"] == (trade_pause, TRADE_PAUSE_PARAMS) and set(TRADE_PAUSE_PARAMS) - set(BASELINE_PARAMS) == {"pause_sec"}
+    p = {**TRADE_PAUSE_PARAMS, "pause_sec": 3.0}
+    books = walk_books(3, 0.0)
+    now = books[-1].time
+    base = baseline(Context.of(books[-1], 0, BASELINE_PARAMS))
+
+    def at(*trades, params=p, inventory=0.0):
+        return trade_pause(ctx_at(books, inventory, params, trades=trades))
+
+    assert at() == base  # 約定が無ければ baseline と同じ
+    sold, bought = Trade(now - 1 * SEC, "A", 100.0, 1.0), Trade(now - 2 * SEC, "B", 100.0, 1.0)
+    assert (at(sold).bid, at(sold).ask) == (None, base.ask)  # 売り手主導の成行の直後は買いを休む。売りはそのまま
+    assert (at(bought).bid, at(bought).ask) == (base.bid, None)
+    assert at(bought, sold) == Quote(bid=None, bid_size=base.bid_size, ask=None, ask_size=base.ask_size)
+    # 窓より古い約定、まだ届いていないはずの直前の約定、向きの分からない約定 (GMO のポーリング) では休まない
+    assert at(Trade(now - 3 * SEC - 1, "A", 100.0, 1.0)) == base
+    assert at(Trade(now - 3 * SEC, "A", 100.0, 1.0)).bid is None
+    assert at(Trade(now - TRADE_PAUSE_DELAY_MS + 1, "A", 100.0, 1.0), Trade(now, "A", 100.0, 1.0)) == base
+    assert at(Trade(now - TRADE_PAUSE_DELAY_MS, "A", 100.0, 1.0)).bid is None
+    assert at(Trade(now - 1 * SEC, "U", 100.0, 1.0)) == base
+    assert at(sold, params={**p, "pause_sec": 0.0}) == base  # 0 なら休まない
+    # 在庫を減らす側でも休む (売り越していても、売り手主導の成行の直後は買い戻さない)
+    assert at(sold, inventory=-1.0).bid is None and at(sold, inventory=-1.0).ask is not None
+
+    # 再生の中でも: 売り手主導の成行が続いたとき、2 本目は拾わない。3 秒静かになれば戻る
+    flat = [Book(i * 2 * SEC, ((99.99, 100.0),), ((100.01, 100.0),)) for i in range(12)]
+    trades = [Trade(1 * SEC, "A", 99.9, 5.0), Trade(3 * SEC, "A", 99.9, 5.0), Trade(15 * SEC, "A", 99.9, 5.0)]
+    res = simulate(flat, trades, trade_pause, p, sz_decimals=2, latency_ms=0)
+    assert [(f.time, f.side) for f in res.fills] == [(1 * SEC, BUY), (15 * SEC, BUY)]
+    assert len(simulate(flat, trades, baseline, BASELINE_PARAMS, sz_decimals=2, latency_ms=0).fills) == 3
+
+
+def test_join_sits_on_the_best_quotes_unless_its_own_side_is_thin():
+    assert QUOTERS["join"] == (join, JOIN_PARAMS)
+    assert set(JOIN_PARAMS) == {"size_usd", "max_inventory_usd", "min_imb", "long_only"}
+
+    def book(bid_sz, ask_sz):
+        return Book(0, ((99.99, bid_sz), (99.98, 50.0)), ((100.01, ask_sz), (100.02, 50.0)))
+
+    p = {**JOIN_PARAMS, "min_imb": -0.5}
+    even = join(Context.of(book(10.0, 10.0), 0, p))
+    assert (even.bid, even.ask) == (99.99, 100.01)  # 最良気配と同じ値段 (内側にも外側にも出さない)
+    assert even.bid_size == even.ask_size == pytest.approx(p["size_usd"] / 100.0)
+    # 偏り +0.5 (買いが厚い): 売りの側から見ると -0.5 でちょうど境目 -> 両側。それより薄い側には並ばない
+    assert join(Context.of(book(30.0, 10.0), 0, p)).ask == 100.01
+    thin_ask, thin_bid = join(Context.of(book(31.0, 10.0), 0, p)), join(Context.of(book(10.0, 31.0), 0, p))
+    assert (thin_ask.bid, thin_ask.ask) == (99.99, None) and (thin_bid.bid, thin_bid.ask) == (None, 100.01)
+    strict = join(Context.of(book(12.0, 10.0), 0, {**p, "min_imb": 0.0}))  # 0 なら厚い側だけ
+    assert (strict.bid, strict.ask) == (99.99, None)
+    always = join(Context.of(book(1.0, 99.0), 0, {**p, "min_imb": -1.0}))  # -1 なら常に並ぶ
+    assert (always.bid, always.ask) == (99.99, 100.01)
+
+    # 在庫: 値段はずらさない。上限で増やす側を止めるだけ
+    cap = p["max_inventory_usd"] / 100.0
+    half = join(Context.of(book(10.0, 10.0), cap / 2, p))
+    assert (half.bid, half.ask) == (99.99, 100.01)
+    long, short = join(Context.of(book(10.0, 10.0), cap, p)), join(Context.of(book(10.0, 10.0), -cap, p))
+    assert (long.bid, long.ask) == (None, 100.01) and (short.bid, short.ask) == (99.99, None)
+
+    # 現物 (long_only): 売りは持っている分だけ。在庫 0 から売りで入らない
+    spot = {**p, "long_only": 1.0}
+    size = spot["size_usd"] / 100.0
+    assert join(Context.of(book(10.0, 10.0), 0, spot)).ask is None and join(Context.of(book(10.0, 10.0), 0, spot)).bid == 99.99
+    assert join(Context.of(book(10.0, 10.0), -0.2, spot)).ask is None
+    part, full = join(Context.of(book(10.0, 10.0), 0.3, spot)), join(Context.of(book(10.0, 10.0), 3 * size, spot))
+    assert (part.ask, part.ask_size) == (100.01, pytest.approx(0.3)) and (full.ask, full.ask_size) == (100.01, pytest.approx(size))
+
+
+def test_join_waits_in_the_queue_on_a_one_tick_spread():
+    """スプレッドが刻み 1 つの板 (coarse_books: 買い 11159 x 7.25、売り 11160 x 20.5。偏りは -0.48)"""
+    p = {**JOIN_PARAMS, "size_usd": 11_160.0, "max_inventory_usd": 100_000.0, "min_imb": -0.5}
+    run_sol = lambda trades, params: simulate(coarse_books(), trades, join, params, instrument=SOL_SPOT, latency_ms=0)  # noqa: E731
+    # 最良買いの 7.25 枚の後ろに並ぶ。列が消化されるまで約定しない
+    assert run_sol([Trade(2 * SEC, "A", 11159.0, 7.0)], p).fills == []
+    (f,) = run_sol([Trade(2 * SEC, "A", 11159.0, 7.0), Trade(3 * SEC, "A", 11159.0, 0.75)], p).fills
+    assert (f.side, f.px, f.size, f.kind) == (BUY, 11159.0, 0.5, "queue")
+    # 弾かれない (最良気配と同じ値段は相手の気配に当たらない)。値段が変わらないので出し直しもしない
+    res = run_sol([], p)
+    assert (res.placed, res.rejected, res.canceled) == (2, 0, 0)
+    # 自分の側が薄すぎる (-0.48 < 0) なら買いは並ばない
+    assert run_sol([Trade(2 * SEC, "A", 11158.0, 9.0)], {**p, "min_imb": 0.0}).fills == []
+    assert [f.kind for f in run_sol([Trade(2 * SEC, "A", 11158.0, 9.0)], p).fills] == ["through"]
+    # 売り側: 20.5 枚の後ろ。現物の設定では、在庫が無い間は売らない。買えた分だけ売りに出る
+    sells = [Trade(2 * SEC, "B", 11160.0, 21.0)]
+    assert [(f.side, f.size) for f in run_sol(sells, p).fills] == [(SELL, 0.5)]
+    spot = {**p, "long_only": 1.0}
+    assert run_sol(sells, spot).fills == []
+    both = [Trade(2 * SEC, "A", 11158.0, 0.3), Trade(15 * SEC, "B", 11161.0, 5.0)]
+    assert [(f.side, f.size) for f in run_sol(both, spot).fills] == [(BUY, 0.3), (SELL, 0.3)]
 
 
 def test_trades_of_unknown_side_fill_whichever_quote_the_price_reached():
