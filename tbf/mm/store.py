@@ -85,14 +85,27 @@ class MmStore:
         rows = self.query("SELECT value FROM meta WHERE key = 'venue'")
         return rows[0][0] if rows else "hyperliquid"
 
-    def claim_venue(self, venue: str) -> None:
-        """この db に venue の記録を足してよいか確かめ、会場を残す。違う会場の db なら ValueError"""
+    def source(self) -> str:
+        """記録の取り方: "rest" (ポーリング) か "ws" (配信)。残す前に作った db は rest。
+        再生の仮定の一部は取り方で変わる (tbf/mm/replay.py)"""
+        rows = self.query("SELECT value FROM meta WHERE key = 'source'")
+        return rows[0][0] if rows else "rest"
+
+    def claim_venue(self, venue: str, source: str = "rest") -> None:
+        """この db に venue の記録を足してよいか確かめ、会場と取り方を残す。違う会場・違う取り方の db なら ValueError"""
         rows = self.query("SELECT value FROM meta WHERE key = 'venue'")
-        current = rows[0][0] if rows else ("hyperliquid" if self.query("SELECT 1 FROM books LIMIT 1") else None)
+        has_books = bool(self.query("SELECT 1 FROM books LIMIT 1"))
+        current = rows[0][0] if rows else ("hyperliquid" if has_books else None)
         if current is not None and current != venue:
             raise ValueError(
                 f"この db は {current} の記録です。{venue} の記録は別のファイルに取ってください (--db data/mm_{venue}.sqlite など)")
+        if has_books and self.source() != source:
+            names = {"rest": "ポーリング (rest)", "ws": "配信 (ws)"}
+            raise ValueError(
+                f"この db は {names[self.source()]} の記録です。{names[source]} の記録は別のファイルに取ってください "
+                "(取り方で再生の仮定が変わるので混ぜない)")
         self.conn.execute("INSERT OR REPLACE INTO meta VALUES ('venue', ?)", (venue,))
+        self.conn.execute("INSERT OR REPLACE INTO meta VALUES ('source', ?)", (source,))
 
     def set_instrument(self, inst: Instrument, now: int) -> None:
         self.conn.execute(

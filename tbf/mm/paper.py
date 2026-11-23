@@ -97,7 +97,7 @@ class Paper:
         fn = QUOTERS[quoter][0]
         self._make = lambda coin: Sim(
             fn, params, instrument=self._instrument(coin), maker_rate=self.rates[coin],
-            latency_ms=latency_ms, cross_fills=cross_fills,
+            latency_ms=latency_ms, cross_fills=cross_fills, queue_from_book=store.source() == "ws",
         )
         self.sims: dict[str, Sim] = {}
         self.first_book: dict[str, int] = {}
@@ -270,7 +270,7 @@ def build_paper_report(
         + f"  処理した気配の末尾 {_utc(end) if end else '-'} UTC",
         f"メイカー手数料 {fee_text}  板に載るまで {cfg.latency_ms} ms  "
         f"約定の仮定 (c) {'あり' if cfg.cross_fills else 'なし (甘い側)'}  "
-        f"気配 {cfg.interval:g} 秒 / 約定 {cfg.trades_interval:g} 秒" + (f"  ※ 末尾から {hours:g} 時間ぶん" if hours is not None else ""),
+        + (f"気配 {cfg.interval:g} 秒 / 約定 {cfg.trades_interval:g} 秒" if cfg.interval else "配信で記録") + (f"  ※ 末尾から {hours:g} 時間ぶん" if hours is not None else ""),
     ]
     others = store.query("SELECT COUNT(*) FROM paper_runs")[0][0] - 1
     if others:
@@ -299,6 +299,7 @@ def build_paper_report(
             coin, res, cfg.params, maker_rate=cfg.rate(coin), latency_ms=cfg.latency_ms,
             taker_rate=insts[coin].taker_rate if insts[coin] else taker_rate, instrument=insts[coin],
             trade_gaps=store.gap_count(coin, max(since, span[0]), span[1]), quoter=cfg.quoter, cross_fills=cfg.cross_fills,
+            queue_from_book=store.source() == "ws",
         ).replace("== 再生 ", "== paper ", 1))
     lines.append(
         f"{'合計':<6} {total[4]:>4}           {sym}{total[5]:>8,.0f} {total[0]:+8.3f} {total[1] + 0.0:+8.3f} {total[2]:+8.3f} {total[3]:+8.3f}"

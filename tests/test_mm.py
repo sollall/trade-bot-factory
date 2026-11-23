@@ -1232,3 +1232,411 @@ async def test_requests_are_spaced_on_venues_that_reject_bursts():
     await rec.poll_books()
     gaps = [b - a for a, b in zip(starts, starts[1:])]
     assert len(starts) == 6 and min(gaps) >= 0.029
+
+
+# ---------------------------------------------------------------- WebSocket (配信での記録)
+
+import asyncio  # noqa: E402
+import base64  # noqa: E402
+import io  # noqa: E402
+import struct  # noqa: E402
+
+from tbf.mm import ws as wslib  # noqa: E402
+from tbf.mm.streams import BitbankStream, GmoStream, StreamError, StreamRecorder  # noqa: E402
+from tbf.mm.ws import OP_CLOSE, OP_CONT, OP_PING, OP_PONG, OP_TEXT, WebSocket, WebSocketError, accept_key, encode_frame, read_frame  # noqa: E402
+
+
+async def frames_of(data: bytes):
+    reader = asyncio.StreamReader()
+    reader.feed_data(data)
+    reader.feed_eof()
+    out = []
+    while not reader.at_eof():
+        out.append(await read_frame(reader))
+    return out
+
+
+async def test_websocket_frames_follow_rfc6455():
+    # RFC 6455 の例: 握手の鍵、マスク無しの "Hello"、マスクつきの "Hello"
+    assert accept_key("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    assert encode_frame(OP_TEXT, b"Hello") == bytes.fromhex("810548656c6c6f")
+    assert encode_frame(OP_TEXT, b"Hello", mask=bytes.fromhex("37fa213d")) == bytes.fromhex("818537fa213d7f9f4d5158")
+    assert await frames_of(bytes.fromhex("818537fa213d7f9f4d5158")) == [(True, OP_TEXT, b"Hello")]  # 読むときはマスクを外す
+    # 長さの 3 通りの書き方 (7 ビット / 16 ビット / 64 ビット) の境目
+    for n in (0, 1, 125, 126, 65535, 65536, 70000):
+        payload = bytes(i % 251 for i in range(n))
+        for mask in (None, b"\x01\x02\x03\x04"):
+            frame = encode_frame(OP_TEXT, payload, mask=mask)
+            assert len(frame) == n + (2 if n < 126 else 4 if n < 65536 else 10) + (4 if mask else 0)
+            assert await frames_of(frame) == [(True, OP_TEXT, payload)]
+    # 分割 (FIN が立っていない断片 + 続き) と、間に挟まる制御フレーム
+    data = encode_frame(OP_TEXT, b"ab", fin=False) + encode_frame(OP_PING, b"p") + encode_frame(OP_CONT, b"cd")
+    assert await frames_of(data) == [(False, OP_TEXT, b"ab"), (True, OP_PING, b"p"), (True, OP_CONT, b"cd")]
+    with pytest.raises(WebSocketError, match="予約ビット"):
+        await frames_of(bytes([0xC1, 0x00]))  # 圧縮などの拡張は扱わない
+    with pytest.raises(asyncio.IncompleteReadError):
+        await frames_of(encode_frame(OP_TEXT, b"Hello")[:4])  # 途中で切れた
+
+
+class WsServer:
+    """標準ライブラリだけの最小の WebSocket サーバ (テスト用)。handler(send, recv, raw) に 1 接続ぶんの台本を書く"""
+
+    def __init__(self, handler, reject=False, bad_accept=False):
+        self.handler, self.reject, self.bad_accept = handler, reject, bad_accept
+        self.client_frames = []  # (opcode, 中身, マスクされていたか)
+        self.connections = 0
+
+    async def __aenter__(self):
+        self.server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
+        self.port = self.server.sockets[0].getsockname()[1]
+        self.url = f"ws://127.0.0.1:{self.port}/stream?x=1"
+        return self
+
+    async def __aexit__(self, *exc):
+        self.server.close()
+
+    async def _serve(self, reader, writer):
+        self.connections += 1
+        try:
+            head = (await reader.readuntil(b"\r\n\r\n")).decode()
+            self.request_line = head.split("\r\n")[0]
+            if self.reject:
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\nno")
+                await writer.drain()
+                return
+            key = next(l.split(":", 1)[1].strip() for l in head.split("\r\n") if l.lower().startswith("sec-websocket-key"))
+            accept = "bm90IHRoZSByaWdodCBvbmU=" if self.bad_accept else accept_key(key)
+            writer.write(f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n".encode())
+
+            async def send(text=None, *, opcode=OP_TEXT, payload=b"", fin=True):
+                writer.write(encode_frame(opcode, text.encode() if text is not None else payload, fin=fin))
+                await writer.drain()
+
+            async def recv():
+                b = await asyncio.wait_for(reader.readexactly(2), 3)  # 返事が来ないときに黙って待ち続けない
+                n = b[1] & 0x7F
+                if n == 126:
+                    n = struct.unpack("!H", await reader.readexactly(2))[0]
+                masked = bool(b[1] & 0x80)
+                mask = await reader.readexactly(4) if masked else b""
+                payload = wslib.apply_mask(await reader.readexactly(n), mask) if masked else await reader.readexactly(n)
+                self.client_frames.append((b[0] & 0x0F, payload, masked))
+                return b[0] & 0x0F, payload
+
+            await self.handler(send, recv, writer)
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+
+
+async def test_websocket_client_against_local_server():
+    async def script(send, recv, writer):
+        assert await recv() == (OP_TEXT, b'{"command":"subscribe"}')
+        await send("he", fin=False)  # 分割された 1 通の途中に ping が挟まる
+        await send(opcode=OP_PING, payload=b"are-you-there")
+        await send(opcode=OP_CONT, payload="llo ".encode(), fin=False)
+        await send(opcode=OP_CONT, payload="気配".encode())
+        assert await recv() == (OP_PONG, b"are-you-there")  # ping と同じ中身の pong が返る
+        await send("x" * 70000)  # 64 ビットの長さ
+        await send(opcode=OP_CLOSE, payload=struct.pack("!H", 1001))
+        assert (await recv())[0] == OP_CLOSE
+
+    async with WsServer(script) as server:
+        ws = await WebSocket.connect(server.url)
+        assert server.request_line == "GET /stream?x=1 HTTP/1.1"
+        await ws.send('{"command":"subscribe"}')
+        assert await asyncio.wait_for(ws.recv(), 3) == "hello 気配"
+        assert await asyncio.wait_for(ws.recv(), 3) == "x" * 70000
+        assert await asyncio.wait_for(ws.recv(), 3) is None and ws.close_code == 1001  # 相手が閉じた
+        await ws.close()
+        await asyncio.sleep(0.05)
+        assert server.client_frames and all(masked for _, _, masked in server.client_frames)  # 送るフレームは必ずマスクする
+
+    async with WsServer(None, reject=True) as server:
+        with pytest.raises(WebSocketError, match="403"):
+            await WebSocket.connect(server.url)
+
+    async def hang_up(send, recv, writer):
+        await send("one")
+        writer.transport.abort()  # close の挨拶なしに切れる
+
+    async with WsServer(hang_up) as server:
+        ws = await WebSocket.connect(server.url)
+        assert await ws.recv() == "one"
+        with pytest.raises((asyncio.IncompleteReadError, ConnectionError)):
+            await ws.recv()
+        await ws.close()
+    with pytest.raises(WebSocketError):
+        await WebSocket.connect("https://example.invalid/")  # ws:// か wss:// だけ
+
+    # 握手の応答が合わない相手 (WebSocket を話さない中継など) にはつながない
+    async with WsServer(None, bad_accept=True) as server:
+        with pytest.raises(WebSocketError, match="Sec-WebSocket-Accept"):
+            await WebSocket.connect(server.url)
+
+    async def stray_continuation(send, recv, writer):
+        await send(opcode=OP_CONT, payload=b"tail without head")
+        await asyncio.sleep(0.2)
+
+    async with WsServer(stray_continuation) as server:
+        ws = await WebSocket.connect(server.url)
+        with pytest.raises(WebSocketError, match="分割フレーム"):
+            await asyncio.wait_for(ws.recv(), 3)
+        await ws.close()
+
+
+async def test_websocket_through_connect_proxy(monkeypatch):
+    """HTTPS プロキシ越し: まず CONNECT で相手までの管を開け、その中で握手する"""
+    async def script(send, recv, writer):
+        await send("via proxy")
+        await recv()
+
+    seen = []
+    async with WsServer(script) as server:
+        async def proxy(reader, writer):
+            head = (await reader.readuntil(b"\r\n\r\n")).decode()
+            seen.append(head.split("\r\n")[0])
+            if "blocked" in head:
+                writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+                await writer.drain()
+                writer.close()
+                return
+            up_r, up_w = await asyncio.open_connection("127.0.0.1", server.port)
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+
+            async def pipe(src, dst):
+                try:
+                    while data := await src.read(4096):
+                        dst.write(data)
+                        await dst.drain()
+                except ConnectionError:
+                    pass
+                dst.close()
+
+            await asyncio.gather(pipe(reader, up_w), pipe(up_r, writer))
+
+        p = await asyncio.start_server(proxy, "127.0.0.1", 0)
+        port = p.sockets[0].getsockname()[1]
+        for name in ("http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{port}")
+        assert wslib.proxy_for("ws://feed.test:8123/x") == ("127.0.0.1", port)
+        ws = await WebSocket.connect("ws://feed.test:8123/x")
+        assert await ws.recv() == "via proxy" and seen == ["CONNECT feed.test:8123 HTTP/1.1"]
+        await ws.close()
+        with pytest.raises(WebSocketError, match="プロキシが CONNECT blocked.test:80 を通さない"):
+            await WebSocket.connect("ws://blocked.test/")
+        monkeypatch.setenv("no_proxy", "feed.test")  # NO_PROXY に入っている相手には直結する
+        assert wslib.proxy_for("ws://feed.test:8123/x") is None
+        p.close()
+
+
+# 2026-11-23 に実物の配信から切り出した例 (段数だけ減らした)
+GMO_WS_BOOK = '{"channel":"orderbooks","asks":[{"price":"9788676","size":"0.04"},{"price":"9788727","size":"0.04"},{"price":"9788931","size":"0.003"}],"bids":[{"price":"9784167","size":"0.02"},{"price":"9783977","size":"0.02"},{"price":"9783900","size":"0.1"}],"symbol":"BTC_JPY","timestamp":"2026-11-23T19:08:18.783Z"}'
+GMO_WS_TRADE = '{"channel":"trades","price":"9784194","side":"SELL","size":"0.02","symbol":"BTC_JPY","timestamp":"2026-11-23T19:08:27.096Z"}'
+BB_OPEN = '0{"sid":"eqepxGz9SKeMrCyMBmk-","upgrades":[],"pingInterval":25000,"pingTimeout":20000,"maxPayload":1000000}'
+
+
+def bb_msg(room, data):
+    return "42" + json.dumps(["message", {"room_name": room, "message": {"data": data}}])
+
+
+def test_gmo_stream_reads_books_and_taker_side_trades():
+    st = GmoStream(["BTC_JPY", "ETH_JPY"], depth=2)
+    start = st.start()
+    # 購読の命令は 1 秒に 1 回まで (公式)。約定は TAKER_ONLY で、仕掛けた側の 1 通だけを受け取る
+    assert [json.loads(t) for t, _ in start][:2] == [
+        {"command": "subscribe", "channel": "orderbooks", "symbol": "BTC_JPY"},
+        {"command": "subscribe", "channel": "trades", "symbol": "BTC_JPY", "option": "TAKER_ONLY"}]
+    assert len(start) == 4 and all(gap >= 1.0 for _, gap in start)
+    ((kind, coin, book),) = st.feed(GMO_WS_BOOK, 0)
+    assert (kind, coin, book.time) == ("book", "BTC_JPY", 1795460898783)
+    assert book.bids == ((9784167.0, 0.02), (9783977.0, 0.02)) and book.asks == ((9788676.0, 0.04), (9788727.0, 0.04))
+    ((_, _, (t1,)),) = st.feed(GMO_WS_TRADE, 0)
+    assert (t1.time, t1.side, t1.px, t1.sz) == (1795460907096, "A", 9784194.0, 0.02)  # SELL = 売り手主導。向きが分かる
+    ((_, _, (t2,)),) = st.feed(GMO_WS_TRADE, 0)  # 同じ時刻・同じ中身の約定がもう 1 件 (id が無いので通し番号で分ける)
+    ((_, _, (t3,)),) = st.feed(GMO_WS_TRADE.replace('"SELL"', '"BUY"'), 0)
+    assert len({t1.tid, t2.tid, t3.tid}) == 3 and t3.side == "B"
+    assert st.feed(GMO_WS_BOOK.replace("BTC_JPY", "SOL"), 0) == []  # 頼んでいない銘柄は捨てる
+    assert st.feed('{"channel":"ticker","symbol":"BTC_JPY","last":"1"}', 0) == []
+    with pytest.raises(StreamError, match="ERR-5003"):
+        st.feed('{"error":"ERR-5003 Request too many."}', 0)
+
+
+def test_bitbank_stream_handshake_and_book_from_whole_plus_diffs():
+    st = BitbankStream(["xrp_jpy"], depth=2)
+    assert st.start() == [] and st.feed(BB_OPEN, 0) == [("send", "40")]  # Engine.IO が開いたら socket.io の接続を頼む
+    joins = st.feed('40{"sid":"1YfR82Il91wcr9ZHBmk_"}', 0)
+    assert [e[1] for e in joins] == ['42["join-room", "transactions_xrp_jpy"]', '42["join-room", "depth_whole_xrp_jpy"]',
+                                     '42["join-room", "depth_diff_xrp_jpy"]']
+    assert st.feed("2", 0) == [("send", "3")]  # サーバーの ping には pong
+
+    ((_, coin, trades),) = st.feed(bb_msg("transactions_xrp_jpy", {"transactions": [
+        {"transaction_id": 1241163071, "side": "sell", "price": "151.410", "amount": "0.6440", "executed_at": 1795460906279},
+        {"transaction_id": 1241163073, "side": "buy", "price": "151.411", "amount": "2500.0000", "executed_at": 1795460906280}]}), 0)
+    assert coin == "xrp_jpy" and [(t.time, t.side, t.px, t.sz, t.tid) for t in trades] == [
+        (1795460906279, "A", 151.41, 0.644, 1241163071), (1795460906280, "B", 151.411, 2500.0, 1241163073)]
+
+    # 公式の手順の例: diff{3}, diff{5}, diff{6}, diff{8}, whole{5} の順に届いたら、whole で置き換えてから 6 と 8 だけを当て直す
+    diff = lambda s, b, a, t: st.feed(bb_msg("depth_diff_xrp_jpy", {"a": a, "b": b, "t": t, "s": str(s)}), 0)  # noqa: E731
+    assert diff(3, [["151.409", "999"]], [], 1000) == []  # 板の全体が来るまでは何も出さない
+    assert diff(5, [["151.300", "5"]], [], 1001) == []
+    assert diff(6, [["151.410", "0"], ["151.408", "70"]], [], 1002) == []
+    assert diff(8, [], [["151.411", "20"], ["151.412", "0"]], 1003) == []
+    ((_, _, book),) = st.feed(bb_msg("depth_whole_xrp_jpy", {
+        "asks": [["151.411", "36118.9371"], ["151.412", "50"], ["151.420", "250"]],
+        "bids": [["151.410", "4930.2439"], ["151.400", "2500"], ["151.300", "5"]], "timestamp": 1001, "sequenceId": "5"}), 0)
+    assert book.bids == ((151.408, 70.0), (151.4, 2500.0)) and book.asks == ((151.411, 20.0), (151.42, 250.0))
+    assert book.time == 1003  # 当て直した差分のうち最後の時刻
+    assert diff(7, [["151.409", "1"]], [], 1004) == []  # 古い順番の差分は当てない
+    ((_, _, book),) = diff(9, [["151.409", "3"]], [], 1005)
+    assert book.bids == ((151.409, 3.0), (151.408, 70.0)) and book.time == 1005
+    # 差分の途中で買いと売りが逆転して見える間は、気配として残さない
+    assert diff(10, [["151.411", "1"]], [], 1006) == []
+    with pytest.raises(StreamError):
+        st.feed('44{"message":"invalid namespace"}', 0)
+
+
+class FakeInstruments:
+    """StreamRecorder.setup が銘柄の情報を取りにいく REST だけ真似る"""
+
+    async def request(self, method, url, headers=None, body=None):
+        return 200, json.dumps(BITBANK_PAIRS if url.endswith("/spot/pairs") else GMO_SYMBOLS)
+
+
+async def test_stream_recorder_keeps_changes_reconnects_and_logs_gaps(tmp_path, monkeypatch):
+    whole = lambda bid, t, seq: bb_msg("depth_whole_xrp_jpy", {  # noqa: E731
+        "asks": [[f"{bid + 0.001 + i / 1000:.3f}", "50"] for i in range(8)],
+        "bids": [[f"{bid - i / 1000:.3f}", "40"] for i in range(8)], "timestamp": t, "sequenceId": str(seq)})
+    tx = lambda tid, side, px, t: bb_msg("transactions_xrp_jpy", {"transactions": [  # noqa: E731
+        {"transaction_id": tid, "side": side, "price": px, "amount": "3.0000", "executed_at": t}]})
+
+    async def script(send, recv, writer):
+        await send(BB_OPEN)
+        assert await recv() == (OP_TEXT, b"40")
+        await send('40{"sid":"x"}')
+        rooms = [json.loads((await recv())[1][2:])[1] for _ in range(3)]
+        assert rooms == ["transactions_xrp_jpy", "depth_whole_xrp_jpy", "depth_diff_xrp_jpy"]
+        if server.connections == 1:
+            await send(whole(146.859, 1000, 10))
+            await send(bb_msg("depth_diff_xrp_jpy", {"a": [], "b": [["146.700", "9"]], "t": 1100, "s": "11"}))  # 上位 5 段は変わらない
+            await send(bb_msg("depth_diff_xrp_jpy", {"a": [], "b": [["146.859", "25"]], "t": 1200, "s": "12"}))  # 最良買いの数量が変わる
+            await send(tx(501, "sell", "146.859", 1250))
+            await send("2")
+            assert await recv() == (OP_TEXT, b"3")
+            writer.transport.abort()  # 回線が切れる
+        else:
+            await send(whole(146.900, 5000, 30))
+            await send(tx(502, "buy", "146.901", 5100))
+            await send(tx(502, "buy", "146.901", 5100))  # 同じ約定がもう一度来ても 1 件
+            await asyncio.sleep(5)
+
+    async with WsServer(script) as server:
+        monkeypatch.setattr(BitbankStream, "url", server.url)
+        store = MmStore(tmp_path / "ws.sqlite")
+        logs = []
+        now = [10_000]
+
+        def clock():
+            now[0] += 1
+            return now[0]
+
+        rec = StreamRecorder(store, Bitbank(), ["xrp_jpy"], depth=5, clock=clock, log=logs.append, backoff=(0.05, 0.2))
+        await rec.setup(FakeInstruments())
+        assert (store.venue(), store.source()) == ("bitbank", "ws") and store.instrument("xrp_jpy").maker_rate == -0.0002
+        await rec.run(max_seconds=1.0)
+
+    books = store.books("xrp_jpy")
+    assert [b.time for b in books] == [1000, 1200, 5000]  # 上位の段が変わったときだけ残す (1100 は残さない)
+    assert len(books[0].bids) == 5 and books[1].bids[0] == (146.859, 25.0) and books[2].best_bid == 146.9
+    assert [(t.time, t.side, t.tid) for t in store.trades("xrp_jpy")] == [(1250, "A", 501), (5100, "B", 502)]
+    assert (rec.reconnects, rec.books_seen, rec.books_kept, rec.trades_kept) == (1, 4, 3, 2)
+    # 切れていた間の約定は取れていない。つなぎ直したときに gaps に残す
+    (gap,) = store.query("SELECT * FROM gaps")
+    assert gap["coin"] == "xrp_jpy" and gap["after"] < gap["before"]
+    polls = store.query("SELECT kind, error FROM polls ORDER BY rowid")
+    assert [p["kind"] for p in polls] == ["ws"] * 3 and [p["error"] is None for p in polls] == [True, False, True]
+    assert any("つなぎ直します" in m for m in logs)
+    assert store.query("SELECT MIN(recv - time) FROM books")[0][0] > 0  # 受け取った時刻と取引所の時刻の両方が残る
+    report = build_report(store)
+    assert "配信の切断 1 回" in report and "配信の遅れ" in report and "ポーリング" not in report
+
+    # 配信の記録とポーリングの記録は同じ db に混ぜない (再生の仮定が違う)
+    with pytest.raises(ValueError, match=r"配信 \(ws\) の記録"):
+        await Recorder(FakeDomestic(), store, ["xrp_jpy"], venue=Bitbank(), min_gap=0, log=lambda m: None).setup()
+    rest = MmStore(tmp_path / "rest.sqlite")
+    r = Recorder(FakeDomestic(), rest, ["xrp_jpy"], venue=Bitbank(), min_gap=0, log=lambda m: None)
+    await r.setup()
+    await r.poll_books()
+    assert rest.source() == "rest"
+    with pytest.raises(ValueError, match=r"ポーリング \(rest\) の記録"):
+        await StreamRecorder(rest, Bitbank(), ["xrp_jpy"], log=lambda m: None).setup(FakeInstruments())
+    with pytest.raises(ValueError, match="未対応"):
+        StreamRecorder(rest, tbf.mm.venues.Hyperliquid(), ["INJ"])
+
+
+def test_queue_shrinks_with_the_book_only_for_stream_recordings():
+    # 買い 99.9 に並ぶ (前に 100 枚)。次の気配で、その値段に見えている数量が 20 枚に減った (前の人が取り消した)
+    books = [Book(0, ((99.9, 100.0),), ((100.1, 100.0),)), Book(10 * SEC, ((99.9, 20.0),), ((100.1, 100.0),)),
+             Book(20 * SEC, ((99.9, 20.0),), ((100.1, 100.0),)), Book(30 * SEC, ((99.9, 20.0),), ((100.1, 100.0),))]
+    trades = [Trade(15 * SEC, "A", 99.9, 25)]
+    # ポーリングの記録 (今までどおり): 列は約定でしか減らないので、25 枚の売りでは届かない
+    assert run(books, trades, fixed(bid=99.9)).fills == []
+    # 配信の記録: 見えている数量 (20) が前の列の上限。25 枚の売りのうち 5 枚が自分に当たる
+    res = run(books, trades, fixed(bid=99.9), queue_from_book=True)
+    assert [(f.px, f.size, f.kind) for f in res.fills] == [(99.9, 5, "queue")]
+    # 見えている数量が増えても列は増えない (後から並んだ人は自分の後ろ)
+    grown = [books[0], Book(10 * SEC, ((99.9, 500.0),), ((100.1, 100.0),)), *books[2:]]
+    assert [f.size for f in run(grown, [Trade(15 * SEC, "A", 99.9, 105)], fixed(bid=99.9), queue_from_book=True).fills] == [5]
+    # その値段が記録した段数の外に出て見えなくなったら、分からないので減らさない
+    away = [books[0], Book(10 * SEC, ((100.0, 5.0),), ((100.2, 100.0),)), Book(20 * SEC, ((100.0, 5.0),), ((100.2, 100.0),))]
+    assert run(away, [Trade(15 * SEC, "A", 99.9, 25)], fixed(bid=99.9), queue_from_book=True).fills == []
+    text = format_result("x", res, {}, maker_rate=0, taker_rate=0, latency_ms=0, trade_gaps=0, queue_from_book=True)
+    assert "配信の記録" in text and "配信の記録" not in format_result("x", res, {}, maker_rate=0, taker_rate=0, latency_ms=0, trade_gaps=0)
+
+
+async def test_paper_on_stream_matches_replay(tmp_path, capsys):
+    db = tmp_path / "ws.sqlite"
+    store = MmStore(db)
+    now = [1_795_460_000_000]
+    rec = StreamRecorder(store, Gmo(), ["XRP_JPY"], depth=5, clock=lambda: now[0], log=lambda m: None)
+    await rec.setup(FakeInstruments())
+    params = parse_params(scale_defaults(BASELINE_PARAMS, "JPY"), ["half_spread_bps=0.15", "skew_bps=0.2"])
+    paper = Paper(store, ["XRP_JPY"], "baseline", params, latency_ms=250, interval=0, trades_interval=0, depth=5,
+                  clock=lambda: now[0], log=lambda m: None)
+    rec.on_book, rec.on_trades = paper.on_book, paper.on_trades
+    stream = GmoStream(["XRP_JPY"], 5)
+    rng = random.Random(21)
+    iso = lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{ms % 1000:03d}Z"  # noqa: E731
+    bid = 151300
+    for _ in range(1500):
+        now[0] += rng.randint(200, 700)
+        bid += rng.choice([-4, -1, 0, 0, 1, 4])
+        t = now[0] - 90  # 取引所の時刻は受け取りより少し前
+        msgs = [json.dumps({"channel": "orderbooks", "symbol": "XRP_JPY", "timestamp": iso(t),
+                            "bids": [{"price": f"{(bid - i) / 1000:.3f}", "size": str(rng.choice([30, 200, 500]))} for i in range(8)],
+                            "asks": [{"price": f"{(bid + 3 + i) / 1000:.3f}", "size": str(rng.choice([30, 200, 500]))} for i in range(8)]})]
+        for _ in range(rng.choice([0, 0, 1, 2])):
+            side = rng.choice(["BUY", "SELL"])
+            px = bid + (3 if side == "BUY" else 0) + rng.choice([-3, -1, 0, 0, 1, 3])
+            msgs.append(json.dumps({"channel": "trades", "symbol": "XRP_JPY", "side": side, "price": f"{px / 1000:.3f}",
+                                    "size": str(rng.choice([10, 100, 400])), "timestamp": iso(t + rng.randint(1, 80))}))
+        for m in msgs:
+            rec.handle(stream.feed(m, now[0]), now[0])
+        rec.settle(now[0])
+    paper.stop()
+    live = run_result(store, paper.run, "XRP_JPY")
+    assert len(live.fills) > 30 and {"through", "queue"} <= {f.kind for f in live.fills}
+    assert all(t.side in "AB" for t in store.trades("XRP_JPY"))  # 配信の記録には向きの分からない約定が無い
+    acct = store.query("SELECT late_trades, late_books FROM paper_account ORDER BY minute DESC LIMIT 1")[0]
+    assert (acct["late_trades"], acct["late_books"]) == (0, 0)
+    assert await mm_main(["replay", "--db", str(db), "--run", str(paper.run)]) == 0
+    out = capsys.readouterr().out
+    assert "突き合わせ: 一致" in out and "配信の記録" in out
+    assert "配信で記録" in build_paper_report(store, taker_rate=0.0)
+    # 配信の記録だから列を気配でも減らしている。その仮定を外すと結果が変わる (= 仮定が効いていて、記録の種類で切り替わっている)
+    first, last = run_span(store, paper.run, "XRP_JPY")
+    plain = simulate(store.books("XRP_JPY", first, last), store.trades("XRP_JPY", first, last), baseline, params,
+                     instrument=store.instrument("XRP_JPY"), latency_ms=250)
+    assert fill_keys(plain.fills) != fill_keys(live.fills)

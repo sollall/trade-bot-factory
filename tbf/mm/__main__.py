@@ -32,6 +32,7 @@ from tbf.mm.recorder import DEFAULT_BUDGET, Recorder, check_budget
 from tbf.mm.replay import DEFAULT_LATENCY_MS, add_markouts, format_result, simulate
 from tbf.mm.report import build_report
 from tbf.mm.store import MmStore
+from tbf.mm.streams import DEFAULT_WS_DEPTH, STREAMS, StreamRecorder
 from tbf.mm.venues import VENUES, scale_defaults
 from tbf.worker.notify import Notifier
 
@@ -63,8 +64,13 @@ async def _record(a: argparse.Namespace) -> int:
         _log("--coins に銘柄を指定してください (例: --coins INJ,MON,ZRO)")
         return 1
     venue = VENUES[a.venue]()
+    ws_mode = a.source == "ws"
+    if ws_mode and a.venue not in STREAMS:
+        _log(f"{a.venue} の配信での記録は未対応です (対応: {', '.join(STREAMS)})")
+        return 1
+    depth = a.depth if a.depth is not None else (DEFAULT_WS_DEPTH if ws_mode else 10)
     try:
-        used = check_budget(len(coins), a.interval, a.trades_interval, a.budget, venue)
+        used = 0.0 if ws_mode else check_budget(len(coins), a.interval, a.trades_interval, a.budget, venue)
     except ValueError as e:
         _log(str(e))
         return 1
@@ -76,9 +82,12 @@ async def _record(a: argparse.Namespace) -> int:
             return 1
     store = MmStore(a.db)
     http = UrllibHttp(timeout=10)
-    recorder = Recorder(http, store, coins, a.interval, a.trades_interval, a.depth, log=_log, venue=venue)
+    if ws_mode:
+        recorder = StreamRecorder(store, venue, coins, depth, log=_log, min_book_ms=a.book_ms)
+    else:
+        recorder = Recorder(http, store, coins, a.interval, a.trades_interval, depth, log=_log, venue=venue)
     try:
-        await recorder.setup()
+        await (recorder.setup(http) if ws_mode else recorder.setup())
     except Exception as e:  # noqa: BLE001
         _log(f"setup failed: {type(e).__name__}: {e}")
         return 1
@@ -86,17 +95,21 @@ async def _record(a: argparse.Namespace) -> int:
     if paper_mode:
         paper = Paper(
             store, coins, a.quoter, params, maker_rate=_maker(a), latency_ms=a.latency_ms,
-            cross_fills=not a.no_cross_fill, interval=a.interval, trades_interval=a.trades_interval, depth=a.depth, log=_log,
+            cross_fills=not a.no_cross_fill, interval=0 if ws_mode else a.interval,
+            trades_interval=0 if ws_mode else a.trades_interval, depth=depth, log=_log,
         )
         recorder.on_book, recorder.on_trades = paper.on_book, paper.on_trades
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
-    _log(
-        f"recording {', '.join(coins)}: 気配 {a.interval:g} 秒ごと / 約定 {a.trades_interval:g} 秒ごと  "
-        f"毎分の{venue.unit} {used:.0f} / 上限 {venue.limit_per_min:.0f} ({venue.limit_note}。docs/mm.md)"
-    )
+    if ws_mode:
+        _log(f"recording {', '.join(coins)}: 配信 (WebSocket) で記録。気配は上位 {depth} 段が変わったときだけ残す。切れたら自動でつなぎ直す")
+    else:
+        _log(
+            f"recording {', '.join(coins)}: 気配 {a.interval:g} 秒ごと / 約定 {a.trades_interval:g} 秒ごと  "
+            f"毎分の{venue.unit} {used:.0f} / 上限 {venue.limit_per_min:.0f} ({venue.limit_note}。docs/mm.md)"
+        )
     if paper is None:
         await recorder.run(stop, a.minutes * 60 if a.minutes else None)
     else:
@@ -114,7 +127,13 @@ async def _record(a: argparse.Namespace) -> int:
             await reports
             paper.stop()
         _log(f"paper run {paper.run} を停止。成績: python -m tbf.mm paper-report --db {a.db} --run {paper.run}")
-    _log(f"stopped (約定の取りこぼしの可能性 {recorder.gaps} 回)")
+    if ws_mode:
+        _log(
+            f"stopped (受け取った気配 {recorder.books_seen} 件のうち残したのは {recorder.books_kept} 件、約定 {recorder.trades_kept} 件、"
+            f"つなぎ直し {recorder.reconnects} 回)"
+        )
+    else:
+        _log(f"stopped (約定の取りこぼしの可能性 {recorder.gaps} 回)")
     return 0
 
 
@@ -141,12 +160,13 @@ def _replay_run(a: argparse.Namespace) -> int:
         res = simulate(
             books, store.trades(coin, span[0], span[1]), QUOTERS[cfg.quoter][0], cfg.params,
             instrument=inst, maker_rate=cfg.rate(coin), latency_ms=cfg.latency_ms,
-            horizons=horizons, cross_fills=cfg.cross_fills,
+            horizons=horizons, cross_fills=cfg.cross_fills, queue_from_book=store.source() == "ws",
         )
         add_markouts(res, store.books(coin, span[0]), horizons)  # paper-report と同じく、区間より後の気配も使って測る
         print(format_result(
             coin, res, cfg.params, maker_rate=cfg.rate(coin), taker_rate=inst.taker_rate, latency_ms=cfg.latency_ms, instrument=inst,
             trade_gaps=store.gap_count(coin, span[0], span[1]), quoter=cfg.quoter, cross_fills=cfg.cross_fills,
+            queue_from_book=store.source() == "ws",
         ))
         p = run_result(store, cfg.id, coin, horizons=horizons)
         same = (
@@ -183,11 +203,12 @@ def _replay(a: argparse.Namespace) -> int:
     res = simulate(
         books, store.trades(a.coin, since), quoter, params, instrument=inst, maker_rate=maker_rate,
         latency_ms=a.latency_ms, horizons=tuple(int(h) for h in a.horizons.split(",")), cross_fills=not a.no_cross_fill,
+        queue_from_book=store.source() == "ws",
     )
     print(format_result(
         a.coin, res, params, maker_rate=maker_rate, taker_rate=inst.taker_rate, instrument=inst,
         latency_ms=a.latency_ms, trade_gaps=store.gap_count(a.coin, books[0].time, books[-1].time), quoter=a.quoter,
-        cross_fills=not a.no_cross_fill,
+        cross_fills=not a.no_cross_fill, queue_from_book=store.source() == "ws",
     ))
     return 0
 
@@ -204,7 +225,10 @@ async def main(argv: list[str]) -> int:
     ap.add_argument("--coins", default="", help="カンマ区切り (例: INJ,MON,ZRO)")
     ap.add_argument("--interval", type=float, default=2.0, help="気配を取る間隔 (秒)")
     ap.add_argument("--trades-interval", type=float, default=10.0, help="約定を取る間隔 (秒)")
-    ap.add_argument("--depth", type=int, default=10, help="残す気配の段数 (片側。Hyperliquid が返すのは 20 段まで)")
+    ap.add_argument("--depth", type=int, default=None, help="残す気配の段数 (片側)。既定はポーリング 10、配信 5")
+    ap.add_argument("--source", default="rest", choices=["rest", "ws"],
+                    help="record / paper の取り方: rest = ポーリング (既定)、ws = 配信 (WebSocket。gmo と bitbank)")
+    ap.add_argument("--book-ms", type=int, default=0, help="配信の記録で、気配を残す間隔の下限 (ms)。0 なら変わるたびに残す")
     ap.add_argument("--budget", type=float, default=DEFAULT_BUDGET, help="流量制限の上限のうち使ってよい割合")
     ap.add_argument("--minutes", type=float, default=None, help="この分数で止める (省略すると止めるまで)")
     # replay

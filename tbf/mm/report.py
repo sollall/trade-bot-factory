@@ -82,6 +82,19 @@ def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = N
             f"  約定の取りこぼしの可能性  {gaps} 回 / 約定のポーリング {tp} 回  "
             "※ 抜けた件数は分からない。上の件数と代金は下限"
         )
+        if store.source() == "ws":
+            # 配信の記録: ポーリングは無い。受け取りの遅れ (手元の時計 − 取引所の時刻。時計のずれを含む) と切断の回数を出す
+            lines.pop()
+            lag = [r[0] for r in store.query("SELECT recv - time FROM books WHERE coin = ? AND time >= ? ORDER BY 1", (coin, start))]
+            tlag = [r[0] for r in store.query("SELECT recv - time FROM trades WHERE coin = ? AND time >= ? ORDER BY 1", (coin, start))]
+            drops = store.query("SELECT COUNT(*) FROM polls WHERE kind = 'ws' AND error IS NOT NULL AND time >= ?", (since,))[0][0]
+            lines.append(f"  約定の取りこぼしの可能性  {gaps} 回 (配信が切れていた間)  配信の切断 {drops} 回")
+            lines.append(
+                f"  配信の遅れ         気配 p50 {quantile(lag, 0.5):.0f}ms p95 {quantile(lag, 0.95):.0f}ms  "
+                f"約定 p50 {quantile(tlag, 0.5):.0f}ms p95 {quantile(tlag, 0.95):.0f}ms  ※ 受け取った時刻 − 取引所の時刻"
+            )
+            lines.append("")
+            continue
         for kind, label in (("l2Book", "気配"), ("recentTrades", "約定")):
             p = store.query(
                 "SELECT COUNT(*) n, COALESCE(SUM(error IS NOT NULL), 0) errors FROM polls WHERE coin = ? AND kind = ? AND time >= ?",

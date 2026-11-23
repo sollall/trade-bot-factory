@@ -25,7 +25,14 @@
       cross_fills=False (--no-cross-fill) で外せる。外したほうは甘い側なので、2 つの間に実際があると読む。
   - 値段が同じなら指値は置いたままで、列の位置も保つ。値段が変わったら取り消して出し直し、列の最後尾。
   - 相手の気配に当たる値段 (買い >= 最良売り) は出さない (ポストオンリーで弾かれる扱い)。
-  - 仕掛けた側が分からない約定 (GMO。side が "U") は、値段が届いた側の指値に (a)(b) を当てる。
+  - 仕掛けた側が分からない約定 (GMO をポーリングで記録したとき。side が "U") は、値段が届いた側の指値に (a)(b) を当てる。
+
+記録の取り方で変わる仮定 (配信で取った記録だけ。ポーリングの記録の再生結果は変えない)
+  - 列 (b) は、記録にある約定に加えて、気配でも減らす (queue_from_book): 自分の値段に見えている数量が
+    自分より前の列より少なくなったら、列をその数量まで減らす。自分の指値は記録の板に載っていないので、
+    見えている数量はすべて他人のもので、自分より後に並んだ分も含む。だから前の列はそれより多くはない。
+    ポーリングの記録では前の人の取消を数えない (列は記録にある約定でしか減らない) ままにしてある。
+  - 配信の記録には向きの分からない約定が無い (GMO は仕掛けた側だけを受け取る)。
 
 損益の内訳 (足すと合計になる)
   - スプレッドの取り分: 約定ごとの (その直前の気配のミッド - 約定値段) x 数量 (売りは符号が逆)
@@ -140,6 +147,16 @@ class Result:
         return sum(1 for f in self.fills if f.side == side)
 
 
+def shown_size(book: Book, side: int, px: float) -> Optional[float]:
+    """その値段に今見えている数量。記録した段数より外側で分からないときは None"""
+    levels = book.bids if side == BUY else book.asks
+    if (px - levels[0][0]) * side > 0:
+        return 0.0
+    if (levels[-1][0] - px) * side > 0:
+        return None
+    return next((sz for p, sz in levels if p == px), 0.0)
+
+
 def queue_ahead(book: Book, side: int, px: float) -> float:
     """その値段に今並んでいる数量 (= これから出す指値の前の列)"""
     levels = book.bids if side == BUY else book.asks
@@ -168,7 +185,10 @@ class Sim:
         max_book_gap_ms: int = MAX_BOOK_GAP_MS,
         cross_fills: bool = True,
         instrument: Optional[Instrument] = None,
+        queue_from_book: bool = False,
     ) -> None:
+        # 配信の記録 (気配が細かい) のときだけ使う: 自分より前の列を、その値段に今見えている数量で頭打ちにする
+        self.queue_from_book = queue_from_book
         # 銘柄の決まりごと (刻み・最小数量・手数料)。sz_decimals だけ渡せば Hyperliquid の銘柄として扱う
         if instrument is None:
             if sz_decimals is None:
@@ -298,6 +318,14 @@ class Sim:
                 self._activate_due(tr.time)
                 self._match(tr)
             self._activate_due(book.time)
+            if self.queue_from_book:
+                # 自分の指値は記録の板に載っていないので、その値段に見えている数量はすべて他人のもの。
+                # 自分より後に並んだ分も含むから、「自分より前の列」はそれより多くはない (前の人の取消で列が減ったことが分かる)
+                for o in (self.live[BUY], self.live[SELL]):
+                    if o and o.remaining > 0:
+                        shown = shown_size(book, o.side, o.px)
+                        if shown is not None:
+                            o.queue = min(o.queue, shown)
             for o in (self.live[BUY], self.live[SELL]):  # (c) 値段が自分の指値を抜けていたら約定
                 if self.cross_fills and o and o.remaining > 0 and (
                     (o.side == BUY and book.best_ask <= o.px) or (o.side == SELL and book.best_bid >= o.px)
@@ -359,10 +387,11 @@ def simulate(
     max_book_gap_ms: int = MAX_BOOK_GAP_MS,
     cross_fills: bool = True,
     instrument: Optional[Instrument] = None,
+    queue_from_book: bool = False,
 ) -> Result:
     """books は時刻順。trades の順は問わない。仮定はモジュールの docstring を参照"""
     sim = Sim(quoter, params, sz_decimals=sz_decimals, maker_rate=maker_rate, latency_ms=latency_ms,
-              max_book_gap_ms=max_book_gap_ms, cross_fills=cross_fills, instrument=instrument)
+              max_book_gap_ms=max_book_gap_ms, cross_fills=cross_fills, instrument=instrument, queue_from_book=queue_from_book)
     trades = sorted(trades, key=trade_order)
     ti = 0
     for k, book in enumerate(books):
@@ -377,6 +406,7 @@ def simulate(
 def format_result(
     coin: str, res: Result, params: dict[str, float], *, maker_rate: float, taker_rate: float, latency_ms: int,
     trade_gaps: int, quoter: str = "baseline", cross_fills: bool = True, instrument: Optional[Instrument] = None,
+    queue_from_book: bool = False,
 ) -> str:
     """金額は銘柄の建値の通貨 (instrument.quote)。instrument を省くと Hyperliquid (USD)"""
     sym = instrument.symbol if instrument else "$"
@@ -401,6 +431,8 @@ def format_result(
         f"  (a)+(b) は、指値を出していた間の市場の約定代金 {sym}{res.market_volume_usd:,.0f} の {share:.1f}%。"
         "(c) は記録にある約定ではないので、この割合に入らない"
     )
+    if queue_from_book:
+        lines.append("  ※ 配信の記録: 自分より前の列 (b) は、その値段に見えている数量を上限に、気配でも減らしている")
     if not cross_fills:
         lines.append("  ※ --no-cross-fill: (c) を外した甘い側の結果。値段が指値を抜けても、約定の記録が無ければ約定させていない")
     lines.append(
