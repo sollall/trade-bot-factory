@@ -1,0 +1,48 @@
+# /etc/systemd/system/mm-record@.service の雛形 (deploy/setup-mm-record.sh が配置する。手順は docs/mm.md)
+# マーケットメイク用の市場の記録 (配信 = WebSocket)。発注はしない。鍵も要らない (公開 API の読み取りだけ)
+# 会場ごとに 1 つ動かす: mm-record@gmo / mm-record@bitbank。記録は /var/lib/mm/<会場>.sqlite
+[Unit]
+Description=trade-bot-factory market making recorder (%i, read-only public data)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mm
+Group=mm
+WorkingDirectory=/opt/trade-bot-factory
+# /etc/mm/<会場>.env に MM_COINS (必須。例: BTC_JPY,ETH_JPY,XRP_JPY) を書く。
+# MM_COINS が無いと起動に失敗して 10 秒ごとに再試行を繰り返す (journalctl に理由が出る)。
+# 落ちて起動し直したときは、同じ sqlite の続きに足される (切れていた間は「切れ目」として残る)
+EnvironmentFile=/etc/mm/%i.env
+ExecStart=/usr/bin/python3 -m tbf.mm record --venue %i --source ws --coins ${MM_COINS} --db /var/lib/mm/%i.sqlite
+Restart=always
+RestartSec=10
+
+# ---- サンドボックス: 乗っ取られても被害を広げない ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+StateDirectory=mm
+ReadWritePaths=/var/lib/mm
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
