@@ -1737,3 +1737,365 @@ async def test_paper_on_stream_matches_replay(tmp_path, capsys):
     plain = simulate(store.books("XRP_JPY", first, last), store.trades("XRP_JPY", first, last), baseline, params,
                      instrument=store.instrument("XRP_JPY"), latency_ms=250)
     assert fill_keys(plain.fills) != fill_keys(live.fills)
+
+
+# ---------------------------------------------------------------- 長い記録を読む (期間・日ごと・標準誤差・複数銘柄・現物の在庫・読み取り専用)
+
+import hashlib  # noqa: E402
+import sqlite3  # noqa: E402
+
+from tbf.mm import analyze  # noqa: E402
+from tbf.mm.__main__ import parse_when  # noqa: E402
+from tbf.mm.book import trade_order  # noqa: E402
+from tbf.mm.replay import add_markouts, simulate_stream  # noqa: E402
+
+DAY = 86_400 * SEC
+T0 = 1_795_478_400_000  # 2026-11-24 00:00:00 UTC
+# 在庫でずらさない (刻みの粗い銘柄で基準のクォーターが片側に張り付かないように。docs/mm.md)。両側に約定が付き続ける
+LONG_ARGS = ["--param", "half_spread_bps=0.3", "--param", "skew_bps=0"]
+LONG_PARAMS = parse_params(scale_defaults(BASELINE_PARAMS, "JPY"), LONG_ARGS[1::2])
+
+
+def recorded(path, coins=("SOL_JPY",), n=1500, seed=5, start=T0 + 3_600 * SEC, step=(500, 2500), spot=False, gap_at=None):
+    """配信で取った形の記録を乱数で作る (刻み 1 つのスプレッド、向きの分かる約定)。gap_at 件目の後に記録の切れ目を入れる"""
+    store = MmStore(path)
+    store.claim_venue("gmo", "ws")
+    rng = random.Random(seed)
+    for coin in coins:
+        store.set_instrument(dataclasses.replace(SOL_SPOT, coin=coin, can_short=not spot), start)
+        t, bid, tid = start, 11159, 0
+        for k in range(n):
+            bid += rng.choice([-2, -1, 0, 0, 1, 2])
+            book = Book(t, tuple((float(bid - i), rng.choice([0.5, 3.0, 30.0])) for i in range(3)),
+                        tuple((float(bid + 1 + i), rng.choice([0.5, 3.0, 30.0])) for i in range(3)))
+            store.add_book(coin, book, t + 40)
+            dt = rng.randint(*step) + (120 * SEC if k == gap_at else 0)
+            new = []
+            for _ in range(rng.choice([0, 1, 3])):
+                buy = rng.random() < 0.5
+                tid += 1
+                new.append(Trade(t + rng.randint(1, dt), "B" if buy else "A", float(bid + (1 if buy else 0) + rng.choice([-1, 0, 0, 1])),
+                                 rng.choice([0.5, 3.0, 30.0]), tid))
+            store.add_trades(coin, new, t + dt)
+            t += dt
+    store.commit()
+    return store
+
+
+def digest(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+
+def test_stream_replay_reads_in_chunks_and_matches_the_in_memory_replay(tmp_path):
+    store = recorded(tmp_path / "rec.sqlite", gap_at=700)
+    books, trades = store.books("SOL_JPY"), store.trades("SOL_JPY")
+    assert list(store.iter_books("SOL_JPY", chunk=7)) == books  # 小さく切って読んでも同じものが同じ順で出る
+    assert sorted(store.iter_trades("SOL_JPY", chunk=5), key=trade_order) == trades
+    assert [t.time for t in store.iter_trades("SOL_JPY", chunk=5)] == [t.time for t in trades]
+    lo, hi = books[100].time, books[900].time
+    assert list(store.iter_books("SOL_JPY", lo, hi, chunk=64)) == store.books("SOL_JPY", lo, hi)
+    assert sorted(store.iter_trades("SOL_JPY", lo, hi, chunk=64), key=trade_order) == store.trades("SOL_JPY", lo, hi)
+    assert [b[0] for b in store.iter_tops("SOL_JPY", lo, hi, chunk=64)] == [b.time for b in store.books("SOL_JPY", lo, hi)]
+
+    kw = dict(instrument=store.instrument("SOL_JPY"), latency_ms=250, queue_from_book=True)
+    whole = simulate(books, trades, baseline, LONG_PARAMS, **kw)
+    rep = simulate_stream(store.iter_books("SOL_JPY", chunk=7), store.iter_trades("SOL_JPY", chunk=5), baseline, LONG_PARAMS, **kw)
+    assert len(whole.fills) > 50 and whole.breaks == 1 and {"through", "queue"} <= {f.kind for f in whole.fills}
+    assert fill_keys(rep.res.fills) == fill_keys(whole.fills)
+    # 数字は丸めずに同じ (足す順まで同じ)。既存の出力が 1 桁も変わらないことの根拠
+    assert rep.res.markouts == whole.markouts and rep.res.edge_bps == whole.edge_bps and set(whole.markouts) == {5, 30, 60}
+    for k in ("total_pnl", "spread_pnl", "inventory_pnl", "position", "observed_ms", "books", "placed", "canceled", "market_volume_usd"):
+        assert getattr(rep.res, k) == getattr(whole, k), k
+    assert (rep.first, rep.last) == (books[0].time, books[-1].time)
+    # 切れ目をまたぐ「N 秒後」と、記録の終わりより先の「N 秒後」は測らない
+    assert whole.markouts[60][1] < len(whole.fills) and [m is None for m in rep.marks[60]].count(True) == len(whole.fills) - whole.markouts[60][1]
+
+
+def test_window_stops_quoting_at_until_but_measures_markouts_past_it(tmp_path):
+    store = recorded(tmp_path / "rec.sqlite")
+    books = store.books("SOL_JPY")
+    since, until = books[200].time, books[900].time
+    seen = []
+
+    def spy(ctx):
+        seen.append(ctx.now)
+        return baseline(ctx)
+
+    kw = dict(instrument=store.instrument("SOL_JPY"), latency_ms=250, queue_from_book=True)
+    rep = simulate_stream(store.iter_books("SOL_JPY", since), store.iter_trades("SOL_JPY", since, until), spy, LONG_PARAMS, until=until, **kw)
+    inside = simulate(store.books("SOL_JPY", since, until), store.trades("SOL_JPY", since, until), baseline, LONG_PARAMS, **kw)
+    assert len(inside.fills) > 20 and fill_keys(rep.res.fills) == fill_keys(inside.fills) and rep.res.total_pnl == inside.total_pnl
+    assert (rep.first, rep.last) == (since, until) and max(seen) == until  # クォーターは区間より後の気配を見ない
+    # 区間の中だけで測ると、終わり際の約定の「60 秒後」が落ちる。区間より後の気配も使えば全部測れる
+    assert inside.markouts[60][1] < len(inside.fills) == rep.res.markouts[60][1]
+    add_markouts(inside, store.books("SOL_JPY", since), (5, 30, 60))
+    assert rep.res.markouts == inside.markouts
+    # 測り終えたら読むのをやめる (記録の残りを全部は読まない)
+    read = []
+    simulate_stream((read.append(b.time) or b for b in store.iter_books("SOL_JPY", since)), store.iter_trades("SOL_JPY", since, until),
+                    baseline, LONG_PARAMS, until=until, **kw)
+    assert until < max(read) <= until + (60 + 60 + 3) * SEC < books[-1].time
+
+
+def test_since_and_until_accept_utc_times_and_offsets_from_the_start():
+    assert parse_when("2026-11-25T03:00", 0) == parse_when("2026-11-25 03:00:00", 0) == parse_when("2026-11-25T03:00Z", 0) == T0 + DAY + 3 * 3_600 * SEC
+    assert parse_when("2026-11-25", 0) == T0 + DAY and parse_when("2026-11-25T09:00+09:00", 0) == T0 + DAY  # 時差を付ければその時刻
+    assert (parse_when("+24h", 1000), parse_when("+1.5d", 1000), parse_when("+90m", 1000)) == (1000 + DAY, 1000 + DAY * 3 // 2, 1000 + 5_400 * SEC)
+    for bad in ("24h", "+24", "yesterday", "+3w"):
+        with pytest.raises(ValueError):
+            parse_when(bad, 0)
+
+
+def bucket_rows(text, title):
+    """表の行を {ラベル: 列} で返す (ラベルは日付、または "日付 時刻"、または 通し)"""
+    rows = {}
+    for line in text.split(title, 1)[1].splitlines()[1:]:
+        if not line.startswith("  ") or line.startswith("  ※"):
+            break
+        m = re.match(r"\s+(\d{4}-\d\d-\d\d(?: \d\d:\d\d)?|通し)\s+(.*)", line)
+        rows[m.group(1)] = m.group(2).replace("/", " ").replace("¥", " ").split()
+    return rows
+
+
+async def test_replay_by_day_splits_fills_without_restarting_inventory(tmp_path, capsys):
+    db = tmp_path / "days.sqlite"
+    # 2026-11-24 20:00 UTC から約 2.4 日ぶん (気配は 15〜55 秒おき)
+    store = recorded(db, n=6000, start=T0 + 20 * 3_600 * SEC, step=(15 * SEC, 55 * SEC))
+    whole = simulate(store.books("SOL_JPY"), store.trades("SOL_JPY"), baseline, LONG_PARAMS, instrument=store.instrument("SOL_JPY"), queue_from_book=True)
+    args = ["replay", "--db", str(db), "--coin", "SOL_JPY", *LONG_ARGS]
+    assert await mm_main(args) == 0
+    plain = capsys.readouterr().out
+    assert f"約定 {len(whole.fills)} 件" in plain and "日ごと" not in plain and "±" not in plain and "区間" not in plain
+
+    assert await mm_main([*args, "--by-day"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(plain.rstrip("\n"))  # 表を足すだけで、今までの出力は変えない
+    rows = bucket_rows(out, "日ごと (UTC)")
+    days = [k for k in rows if k != "通し"]
+    assert days == ["2026-11-24", "2026-11-25", "2026-11-26", "2026-11-27"]
+    assert sum(int(rows[d][0]) for d in days) == int(rows["通し"][0]) == len(whole.fills)
+    for d, day_start in zip(days, range(T0, T0 + 4 * DAY, DAY)):
+        part = [f for f in whole.fills if day_start <= f.time < day_start + DAY]
+        assert (int(rows[d][0]), int(rows[d][1]), int(rows[d][2])) == (len(part), sum(f.side == BUY for f in part), sum(f.side == SELL for f in part))
+        # 在庫は日をまたいで通し: その日の終わりまでの約定の和
+        assert float(rows[d][-1]) == pytest.approx(sum(f.side * f.size for f in whole.fills if f.time < day_start + DAY), abs=1e-9)
+        # その日の約定だけの、代金で加重した瞬間の取り分
+        edge = sum(f.side * (f.mid - f.px) * f.size for f in part) / sum(f.px * f.size for f in part) * 10_000
+        assert float(rows[d][4]) == pytest.approx(edge, abs=0.006)
+    assert float(rows["通し"][4]) == pytest.approx(whole.edge_bps, abs=0.006)
+    assert rows["通し"][5].split("±")[0] == f"{whole.markouts[5][0]:+.2f}" and rows["通し"][7].split("±")[0] == f"{whole.markouts[60][0]:+.2f}"
+
+    # 日本時間で区切ると 9 時間ずれる (20:00 UTC = 翌日 05:00 JST)。N 時間ごとにも割れる
+    assert await mm_main([*args, "--by-day", "--jst"]) == 0
+    jst = bucket_rows(capsys.readouterr().out, "日ごと (JST)")
+    assert list(jst)[:1] == ["2026-11-25"] and int(jst["通し"][0]) == len(whole.fills) and int(jst["2026-11-25"][0]) != int(rows["2026-11-25"][0])
+    assert await mm_main([*args, "--by-hours", "12"]) == 0
+    half = bucket_rows(capsys.readouterr().out, "12 時間ごと (UTC)")
+    assert list(half)[:2] == ["2026-11-24 12:00", "2026-11-25 00:00"] and sum(int(v[0]) for k, v in half.items() if k != "通し") == len(whole.fills)
+
+    # 期間を切る: 記録の先頭から 24 時間ずつ。続きの区間どうしは気配が重ならず、足すと全部になる
+    counts = []
+    for since, until in (("+0h", "+24h"), ("+24h", "+48h"), ("+48h", "+99d")):
+        assert await mm_main([*args, "--since", since, "--until", until]) == 0
+        out = capsys.readouterr().out
+        assert "区間 (UTC): 2026-11-2" in out and "区間より後の気配も使って測っている" in out
+        counts.append(int(re.search(r"気配 (\d+) 件", out).group(1)))
+    assert sum(counts) == len(store.books("SOL_JPY")) and min(counts) > 1000
+    first = store.books("SOL_JPY")[0].time
+    one_day = simulate_stream(store.iter_books("SOL_JPY", first + DAY), store.iter_trades("SOL_JPY", first + DAY, first + 2 * DAY - 1), baseline,
+                              LONG_PARAMS, until=first + 2 * DAY - 1, instrument=store.instrument("SOL_JPY"), queue_from_book=True)
+    assert await mm_main([*args, "--since", "2026-11-25T20:00", "--until", "2026-11-26T20:00"]) == 0  # 同じ区間を UTC の時刻で
+    out = capsys.readouterr().out
+    assert f"約定 {len(one_day.res.fills)} 件" in out and f"({one_day.res.markouts[60][1]} 件。" in out and one_day.res.markouts[60][1] == len(one_day.res.fills)
+    # report も同じ区間で数える
+    assert await mm_main(["report", "--db", str(db), "--since", "+24h", "--until", "+48h"]) == 0
+    assert f"気配 {counts[1]} 件" in capsys.readouterr().out
+    assert await mm_main(["report", "--db", str(db)]) == 0
+    assert f"気配 {sum(counts)} 件" in capsys.readouterr().out
+    # 取り違えやすい指定は、黙って進めずに止める
+    for bad in (["--hours", "3", "--since", "+1h"], ["--since", "+2h", "--until", "+1h"], ["--since", "noon"]):
+        assert await mm_main([*args, *bad]) == 1 and await mm_main(["report", "--db", str(db), *bad]) == 1
+    assert await mm_main(["replay", "--db", str(db), "--run", "1", "--by-day"]) == 1
+
+
+def test_standard_error_comes_from_the_spread_between_time_blocks():
+    block = 5 * 60 * SEC
+    # 塊ごとの (取り分の金額, 代金): 塊 0 = (3, 1000) を 2 件に分けたもの、塊 1 = (-1, 1000)、塊 3 = (1, 2000)
+    items = [(10, 1.0, 400.0), (block - 1, 2.0, 600.0), (block, -1.0, 1000.0), (3 * block + 5, 1.0, 2000.0)]
+    bps, n, se, blocks = analyze.ratio(items, block)
+    r = 3.0 / 4000.0
+    assert (n, blocks) == (4, 3) and bps == pytest.approx(r * 10_000)
+    resid = [3 - r * 1000, -1 - r * 1000, 1 - r * 2000]
+    assert se == pytest.approx((3 / 2 * sum(e * e for e in resid)) ** 0.5 / 4000 * 10_000)
+    # 同じ塊の中で何件に分かれていても変わらない (続けて付いた約定を別々の証拠として数えない)
+    assert analyze.ratio([(10, 3.0, 1000.0), *items[2:]], block)[2] == pytest.approx(se)
+    # 塊が 1 つしか無ければ出さない。どの塊も同じ取り分なら 0
+    assert analyze.ratio(items[:2], block)[2] is None and analyze.ratio([], block) [1:] == (0, None, 0)
+    assert analyze.ratio([(k * block, 2.0, 1000.0) for k in range(5)], block)[2] == pytest.approx(0)
+    # 塊を増やすと (同じばらつきなら) 小さくなる
+    noisy = lambda k: [(i * block, 1.0 + (-1) ** i, 1000.0) for i in range(k)]  # noqa: E731
+    assert analyze.ratio(noisy(40), block)[2] < analyze.ratio(noisy(10), block)[2]
+
+
+async def test_replay_shows_standard_errors_only_when_asked(tmp_path, capsys):
+    db = tmp_path / "rec.sqlite"
+    store = recorded(db)
+    args = ["replay", "--db", str(db), "--coin", "SOL_JPY", *LONG_ARGS]
+    assert await mm_main(args) == 0
+    plain = capsys.readouterr().out
+    assert await mm_main([*args, "--se"]) == 0
+    out = capsys.readouterr().out
+    rep = simulate_stream(store.iter_books("SOL_JPY"), store.iter_trades("SOL_JPY"), baseline, LONG_PARAMS,
+                          instrument=store.instrument("SOL_JPY"), queue_from_book=True)
+    ss = analyze.samples(rep, (5, 30, 60))
+    assert [len(s.marks) for s in ss] == [3] * len(rep.res.fills)
+    for k, h in enumerate((5, 30, 60)):
+        bps, n, se, _ = analyze.markout(ss, k, 5 * 60 * SEC)
+        assert (pytest.approx(bps), n) == rep.res.markouts[h] and se > 0  # 同じ約定から同じ平均が出る
+        assert f"{h:>3} 秒後     {bps:+7.2f} ± {se:.2f}   ({n} 件。" in out
+    assert "± は標準誤差 (5 分ごとの塊のばらつきから" in out
+    # ± を外せば今までの出力と同じ
+    assert re.sub(r" ± \d+\.\d\d", "", "\n".join(l for l in out.splitlines() if "標準誤差" not in l)) == plain.rstrip("\n")
+    assert await mm_main([*args, "--se", "30"]) == 0
+    assert "30 分ごとの塊" in capsys.readouterr().out
+
+
+async def test_replay_of_several_coins_prints_one_row_each_and_a_total(tmp_path, capsys):
+    db = tmp_path / "rec.sqlite"
+    store = recorded(db, coins=("ETH_JPY", "SOL_JPY", "XRP_JPY"), n=800)
+    res = {c: simulate(store.books(c), store.trades(c), baseline, LONG_PARAMS, instrument=store.instrument(c), queue_from_book=True)
+           for c in store.coins()}
+    args = ["replay", "--db", str(db), *LONG_ARGS]
+    singles = {}
+    for c in res:
+        assert await mm_main([*args, "--coin", c]) == 0
+        singles[c] = capsys.readouterr().out
+        assert "銘柄 " not in singles[c] and singles[c].startswith(f"== 再生 {c}  クォーター baseline  half_spread_bps=0.3")  # 1 銘柄を名指ししたら今までどおり
+    assert await mm_main(args) == 0  # --coin を省くと全銘柄
+    out = capsys.readouterr().out
+    table, details = out.split("\n\n", 1)
+    lines = table.replace("¥", " ").splitlines()
+    assert lines[0].startswith("== 再生 ETH_JPY, SOL_JPY, XRP_JPY") and [l.split()[0] for l in lines[2:6]] == [*res, "合計"]
+    for line, (c, r) in zip(lines[2:5], res.items()):
+        cols = line.split()
+        kinds = "/".join(str(sum(1 for f in r.fills if f.kind == k)) for k in ("through", "queue", "cross"))
+        assert (int(cols[1]), cols[2]) == (len(r.fills), kinds) and float(cols[7]) == pytest.approx(r.total_pnl, abs=0.001)
+        assert cols[8] == f"{r.edge_bps:+.2f}" and cols[9].split("±")[0] == f"{r.markouts[5][0]:+.2f}"
+    total = lines[5].split()
+    assert int(total[1]) == sum(len(r.fills) for r in res.values()) and float(total[6]) == pytest.approx(sum(r.total_pnl for r in res.values()), abs=0.002)
+    # 合計の取り分は、全銘柄の約定を合わせて代金で加重したもの
+    num = sum(f.side * (f.mid - f.px) * f.size for r in res.values() for f in r.fills)
+    assert float(total[7]) == pytest.approx(num / sum(r.volume_usd for r in res.values()) * 10_000, abs=0.006)
+    assert details.rstrip("\n") == "\n\n".join(s.rstrip("\n") for s in singles.values())  # 下に付く銘柄ごとの内訳は、1 銘柄ずつ流したものと同じ
+    # カンマ区切りで選ぶ。日ごとの表は、合計と銘柄ごとの両方に付く
+    assert await mm_main([*args, "--coin", "XRP_JPY,ETH_JPY", "--by-day"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("== 再生 XRP_JPY, ETH_JPY") and "SOL_JPY" not in out and out.count("日ごと (UTC)") == 3
+    both = bucket_rows(out, "全銘柄の合計  日ごと (UTC)")
+    assert int(both["通し"][0]) == len(res["XRP_JPY"].fills) + len(res["ETH_JPY"].fills) and "在庫は出さない" in out
+    assert await mm_main([*args, "--coin", "SOL_JPY,NOPE"]) == 1
+
+
+def test_spot_inventory_never_sells_what_it_does_not_hold():
+    both = lambda ctx: Quote(bid=11159.0, bid_size=1, ask=11160.0, ask_size=1)  # noqa: E731
+    trades = [Trade(2 * SEC, "B", 11161.0, 0.4), Trade(12 * SEC, "A", 11158.0, 0.1), Trade(22 * SEC, "B", 11161.0, 0.4),
+              Trade(32 * SEC, "B", 11161.0, 0.4)]
+    kw = dict(instrument=SOL_SPOT, latency_ms=0)
+    # 既定は今までどおり: 在庫 0 から売れてしまう
+    loose = simulate(coarse_books(5), trades, both, {}, **kw)
+    assert [(f.side, f.size) for f in loose.fills] == [(SELL, 0.4), (BUY, 0.1), (SELL, 0.4), (SELL, 0.2)] and loose.position < 0
+    # 在庫制約あり: 在庫が無い間の売りは付かず、0.1 買えた後はその 0.1 だけ売れる。売り切ったらまた売れない
+    sim = Sim(both, {}, spot_inventory=True, **kw)
+    by_time = {t.time: t for t in trades}
+    fills = [f for k, b in enumerate(coarse_books(5)) for f in sim.step(b, [t for t in by_time.values() if (k - 1) * 10 * SEC < t.time <= k * 10 * SEC])]
+    assert [(f.time, f.side, f.size) for f in fills] == [(12 * SEC, BUY, 0.1), (22 * SEC, SELL, 0.1)]
+    assert sim.res.position == 0 and sim.res.max_abs_position == 0.1
+    assert (sim.spot_withheld, sim.spot_capped, sim.res.too_small) == (4, 1, 0)  # 売りを出せなかった判断 4 回、0.1 に絞った判断 1 回
+    assert sim.res.total_pnl == pytest.approx(sim.res.spread_pnl + sim.res.fee_pnl + sim.res.inventory_pnl, abs=1e-9)
+    strict = simulate(coarse_books(5), trades, both, {}, spot_inventory=True, **kw)
+    assert fill_keys(strict.fills) == fill_keys(fills)
+    text = format_result("SOL", strict, {}, maker_rate=-0.0003, taker_rate=0.0009, latency_ms=0, trade_gaps=0, instrument=SOL_SPOT, spot=(4, 1))
+    assert "現物の在庫制約あり (--spot-inventory)" in text and "売り指値を出せなかった判断が 4 回" in text and "守らせていない" not in text
+
+
+async def test_spot_inventory_option_applies_to_spot_coins_only(tmp_path, capsys):
+    db = tmp_path / "spot.sqlite"
+    store = recorded(db, coins=("SOL",), spot=True)
+    recorded(db, coins=("SOL_JPY",), seed=6)  # 同じ db にレバレッジの銘柄 (売りから入れる)
+    kw = dict(instrument=store.instrument("SOL"), queue_from_book=True)
+    assert store.instrument("SOL").can_short is False and store.instrument("SOL_JPY").can_short is True
+    loose = simulate_stream(store.iter_books("SOL"), store.iter_trades("SOL"), baseline, LONG_PARAMS, **kw)
+    strict = simulate_stream(store.iter_books("SOL"), store.iter_trades("SOL"), baseline, LONG_PARAMS, spot_inventory=True, **kw)
+
+    def lowest(fills):
+        pos, low = 0.0, 0.0
+        for f in fills:
+            pos = round(pos + f.side * f.size, 9)
+            low = min(low, pos)
+        return low
+
+    assert lowest(loose.res.fills) < 0 == lowest(strict.res.fills) and len(strict.res.fills) > 20 and strict.spot_withheld > 0
+    assert strict.res.total_pnl == pytest.approx(strict.res.spread_pnl + strict.res.fee_pnl + strict.res.inventory_pnl, abs=1e-6)
+    args = ["replay", "--db", str(db), *LONG_ARGS]
+    assert await mm_main([*args, "--coin", "SOL"]) == 0
+    out = capsys.readouterr().out
+    assert f"約定 {len(loose.res.fills)} 件" in out and "この再生はそれを守らせていない" in out  # 既定は変えない
+    assert await mm_main([*args, "--coin", "SOL", "--spot-inventory"]) == 0
+    out = capsys.readouterr().out
+    assert f"約定 {len(strict.res.fills)} 件" in out and "現物の在庫制約あり" in out and "守らせていない" not in out
+    # 売りから入れる銘柄には効かない
+    assert await mm_main([*args, "--coin", "SOL_JPY"]) == 0
+    lev = capsys.readouterr().out
+    assert await mm_main([*args, "--coin", "SOL_JPY", "--spot-inventory"]) == 0
+    assert capsys.readouterr().out == lev
+
+
+async def test_readers_open_read_only_and_leave_the_file_alone(tmp_path, capsys):
+    db = tmp_path / "rec.sqlite"
+    recorded(db, n=300).conn.close()
+    # paper より前・会場を残す前の古い形 (後から足したテーブルが無い) にする。読むだけのコマンドは、これを作り足さない
+    old = tmp_path / "old.sqlite"
+    hl = MmStore(old)
+    hl.set_coin("INJ", 1, 0)
+    for b in flat_books(50, bid=5.89, ask=5.9):
+        hl.add_book("INJ", b, b.time + 300)
+    for name in ("meta", "instruments", "paper_runs", "paper_fills", "paper_account", "paper_run_fees"):
+        hl.conn.execute(f"DROP TABLE {name}")
+    hl.commit()
+    hl.conn.close()
+    for path, coin in ((db, "SOL_JPY"), (old, "INJ")):
+        before = digest(path)
+        for cmd in (["report"], ["replay", "--coin", coin], ["replay", "--by-day", "--se"], ["paper-report"], ["replay", "--run", "1"]):
+            assert await mm_main([cmd[0], "--db", str(path), *cmd[1:]]) == (1 if "--run" in cmd else 0), cmd
+        out = capsys.readouterr().out
+        assert f"== {coin}  記録" in out and f"== 再生 {coin}  クォーター baseline" in out and "(paper の run がありません)" in out
+        assert digest(path) == before and sorted(p.name for p in tmp_path.iterdir()) == ["old.sqlite", "rec.sqlite"]
+    ro = MmStore(old, readonly=True)
+    assert (ro.venue(), ro.source(), ro.instrument("INJ").venue, ro.instrument("NOPE")) == ("hyperliquid", "rest", "hyperliquid", None)
+    with pytest.raises(sqlite3.OperationalError):
+        ro.add_book("INJ", Book(10**9, ((1.0, 1.0),), ((2.0, 1.0),)), 0)
+    # 無いファイルは作らずに断る (前は空の db を作っていた)
+    for cmd in ("report", "replay", "paper-report"):
+        assert await mm_main([cmd, "--db", str(tmp_path / "typo.sqlite")]) == 1
+    assert not (tmp_path / "typo.sqlite").exists()
+    with pytest.raises(sqlite3.OperationalError):
+        MmStore(tmp_path / "typo.sqlite", readonly=True)
+
+
+def test_reading_a_database_that_is_being_recorded_does_not_block_the_writer(tmp_path):
+    db = tmp_path / "rec.sqlite"
+    writer = recorded(db, n=300)
+    writer.conn.execute("PRAGMA busy_timeout = 0")  # 待たずに失敗させる: 読む側がロックを持ち続けていれば commit が落ちる
+    reader = MmStore(db, readonly=True)
+    last = reader.last_time("SOL_JPY")
+    it = reader.iter_books("SOL_JPY", chunk=50)
+    got = [next(it) for _ in range(120)]  # 読んでいる途中 (3 回目の問い合わせの中ほど)
+    trades = reader.iter_trades("SOL_JPY", chunk=50)
+    next(trades)
+    for k in range(1, 4):
+        writer.add_book("SOL_JPY", Book(last + k * SEC, ((11159.0, 1.0),), ((11160.0, 1.0),)), last + k * SEC)
+        writer.add_trades("SOL_JPY", [Trade(last + k * SEC, "B", 11160.0, 1.0, 10**6 + k)], last + k * SEC)
+        writer.commit()
+    got += list(it)
+    assert [b.time for b in got] == [b.time for b in writer.books("SOL_JPY")] and len(got) == 303  # 続きも抜けずに読める
+    assert len([1, *trades]) == len(writer.trades("SOL_JPY"))

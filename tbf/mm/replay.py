@@ -34,6 +34,11 @@
     ポーリングの記録では前の人の取消を数えない (列は記録にある約定でしか減らない) ままにしてある。
   - 配信の記録には向きの分からない約定が無い (GMO は仕掛けた側だけを受け取る)。
 
+現物の在庫 (spot_inventory=True / --spot-inventory のときだけ。既定は今までどおり守らせない)
+  - 売り指値の数量は、板に載せる時点で持っている在庫まで。在庫が最小数量に届かなければ売り指値は出さない。
+    在庫は 0 から始まるので、買いが約定するまでは買い指値だけになる。
+  - 値段が同じで置いたままの売り指値は、後から在庫が増えても数量を増やさない (上の「置いたまま」と同じ扱い)。
+
 損益の内訳 (足すと合計になる)
   - スプレッドの取り分: 約定ごとの (その直前の気配のミッド - 約定値段) x 数量 (売りは符号が逆)
   - 手数料: 約定代金 x メイカー手数料率
@@ -49,7 +54,7 @@ import bisect
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from tbf.mm.book import Book, Trade, ceil_to, floor_to, price_decimals, round_down, round_up, trade_order
 from tbf.mm.quoter import HISTORY_SEC, MAX_HISTORY, Context, Quote, Quoter
@@ -186,7 +191,13 @@ class Sim:
         cross_fills: bool = True,
         instrument: Optional[Instrument] = None,
         queue_from_book: bool = False,
+        spot_inventory: bool = False,
     ) -> None:
+        # 現物の在庫制約: 在庫を 0 より下にする売りを出さない (モジュールの docstring)。数えるのは Sim の側
+        # (Result は paper が sqlite に丸ごと残す形なので、項目を足さない)
+        self.spot_inventory = spot_inventory
+        self.spot_withheld = 0  # 在庫が足りず売り指値を出せなかった回数
+        self.spot_capped = 0  # 売り指値の数量を在庫まで減らした回数
         # 配信の記録 (気配が細かい) のときだけ使う: 自分より前の列を、その値段に今見えている数量で頭打ちにする
         self.queue_from_book = queue_from_book
         # 銘柄の決まりごと (刻み・最小数量・手数料)。sz_decimals だけ渡せば Hyperliquid の銘柄として扱う
@@ -224,6 +235,10 @@ class Sim:
         if size <= 0:
             return
         r = self.res
+        if self.spot_inventory and o.side == SELL:
+            size = min(size, max(r.position, 0.0))  # 念のため。数量は板に載せるときに在庫までに絞ってある
+            if size <= 0:
+                return
         self._advance(max(t, self.clock))
         o.remaining = round(o.remaining - size, 9)
         r.position = round(r.position + o.side * size, 9)
@@ -255,13 +270,29 @@ class Sim:
             return None
         return px, size
 
+    def _normalize_sell(self, quote: Quote, book: Book) -> Optional[tuple[float, float]]:
+        if not self.spot_inventory or quote.ask is None:
+            return self._normalize(SELL, quote.ask, quote.ask_size, book)
+        have = max(self.res.position, 0.0)
+        if have >= quote.ask_size:
+            return self._normalize(SELL, quote.ask, quote.ask_size, book)
+        # 現物: 持っている在庫までしか売りに出せない。足りなくて出せなかった分は too_small ではなく別に数える
+        too_small = self.res.too_small
+        want = self._normalize(SELL, quote.ask, have, book)
+        if want is None and self.res.too_small > too_small:
+            self.res.too_small = too_small
+            self.spot_withheld += 1
+        elif want is not None:
+            self.spot_capped += 1
+        return want
+
     def _activate_due(self, t: int) -> None:
         if not self.pending or self.pending[0] > t:
             return
         _, quote, book = self.pending
         self.pending = None
         for side, want in ((BUY, self._normalize(BUY, quote.bid, quote.bid_size, book)),
-                           (SELL, self._normalize(SELL, quote.ask, quote.ask_size, book))):
+                           (SELL, self._normalize_sell(quote, book))):
             cur = self.live[side]
             if cur and cur.remaining > 0 and want and want[0] == cur.px:
                 continue  # 値段が同じなら置いたまま (列の位置を保つ)
@@ -388,10 +419,13 @@ def simulate(
     cross_fills: bool = True,
     instrument: Optional[Instrument] = None,
     queue_from_book: bool = False,
+    spot_inventory: bool = False,
 ) -> Result:
-    """books は時刻順。trades の順は問わない。仮定はモジュールの docstring を参照"""
+    """books は時刻順。trades の順は問わない。仮定はモジュールの docstring を参照。
+    全部をメモリに載せる。大きい記録は simulate_stream (結果は同じ)"""
     sim = Sim(quoter, params, sz_decimals=sz_decimals, maker_rate=maker_rate, latency_ms=latency_ms,
-              max_book_gap_ms=max_book_gap_ms, cross_fills=cross_fills, instrument=instrument, queue_from_book=queue_from_book)
+              max_book_gap_ms=max_book_gap_ms, cross_fills=cross_fills, instrument=instrument, queue_from_book=queue_from_book,
+              spot_inventory=spot_inventory)
     trades = sorted(trades, key=trade_order)
     ti = 0
     for k, book in enumerate(books):
@@ -403,12 +437,98 @@ def simulate(
     return sim.res
 
 
+@dataclass
+class Replayed:
+    """simulate_stream の結果"""
+
+    res: Result
+    #: N 秒 -> 約定ごと (res.fills と同じ並び) の「N 秒後のミッド」。測れなかった約定は None
+    marks: dict[int, list[Optional[float]]]
+    first: int = 0  # 流した気配の最初と最後の時刻
+    last: int = 0
+    spot_withheld: int = 0
+    spot_capped: int = 0
+
+
+def set_markouts(res: Result, marks: dict[int, list[Optional[float]]]) -> None:
+    """約定ごとの N 秒後のミッドから、add_markouts と同じ値 (同じ足し算の順) を res に入れる"""
+    weight = sum(f.size * f.px for f in res.fills)
+    res.edge_bps = sum(f.side * (f.mid - f.px) * f.size for f in res.fills) / weight * 10_000 if weight else 0.0
+    res.markouts = {}
+    for h, mids in marks.items():
+        num = den = 0.0
+        n = 0
+        for f, mid in zip(res.fills, mids):
+            if mid is None:
+                continue
+            num += f.side * (mid - f.px) * f.size
+            den += f.size * f.px
+            n += 1
+        if den:
+            res.markouts[h] = (num / den * 10_000, n)
+
+
+def simulate_stream(
+    books: Iterable[Book],
+    trades: Iterable[Trade],
+    quoter: Quoter,
+    params: dict[str, float],
+    *,
+    until: Optional[int] = None,
+    horizons: tuple[int, ...] = (5, 30, 60),
+    max_book_gap_ms: int = MAX_BOOK_GAP_MS,
+    **sim_args,
+) -> Replayed:
+    """simulate と同じ結果を、気配と約定を 1 件ずつ読みながら出す (全部をメモリに載せない)。
+    books も trades も時刻順 (同じ時刻の約定どうしの順は問わない)。残るのは約定の一覧だけ。
+
+    until を渡すと、指値を出すのは until 以前の気配まで。それより後の気配は「N 秒後のミッド」を測るのにだけ使い
+    (クォーターには渡さない。在庫も損益も動かさない)、測り終えたら読むのをやめる。
+    """
+    sim = Sim(quoter, params, max_book_gap_ms=max_book_gap_ms, **sim_args)
+    fills = sim.res.fills
+    marks: dict[int, list[Optional[float]]] = {h: [] for h in horizons}
+    waiting = {h: 0 for h in horizons}  # N 秒後がまだ来ていない最初の約定 (fills の位置)。約定は時刻順なので前から順に決まる
+    reach = (max(horizons, default=0)) * 1000 + max_book_gap_ms
+    it = iter(trades)
+    tr = next(it, None)
+    first = last = 0
+    for book in books:
+        if until is None or book.time <= until:
+            batch = []
+            while tr is not None and tr.time <= book.time:
+                batch.append(tr)
+                tr = next(it, None)
+            if sim.prev is None:
+                first = book.time
+                batch = []  # 最初の気配より前の約定は、当てる指値が無い
+            sim.step(book, batch)
+            last = book.time
+        elif book.time > last + reach or all(waiting[h] == len(fills) for h in horizons):
+            break
+        # N 秒たった後の最初の気配で測る (N 秒より手前では測らない)。そこまでが切れ目なら測らない
+        for h in horizons:
+            i, done = waiting[h], marks[h]
+            while i < len(fills) and fills[i].time + h * 1000 <= book.time:
+                done.append(book.mid if book.time - (fills[i].time + h * 1000) <= max_book_gap_ms else None)
+                i += 1
+            waiting[h] = i
+    for h in horizons:
+        marks[h].extend([None] * (len(fills) - len(marks[h])))  # 記録がそこまで無い
+    set_markouts(sim.res, marks)
+    return Replayed(sim.res, marks, first, last, sim.spot_withheld, sim.spot_capped)
+
+
 def format_result(
     coin: str, res: Result, params: dict[str, float], *, maker_rate: float, taker_rate: float, latency_ms: int,
     trade_gaps: int, quoter: str = "baseline", cross_fills: bool = True, instrument: Optional[Instrument] = None,
     queue_from_book: bool = False,
+    errors: Optional[dict[int, Optional[float]]] = None, error_note: str = "",
+    spot: Optional[tuple[int, int]] = None,
 ) -> str:
-    """金額は銘柄の建値の通貨 (instrument.quote)。instrument を省くと Hyperliquid (USD)"""
+    """金額は銘柄の建値の通貨 (instrument.quote)。instrument を省くと Hyperliquid (USD)。
+    errors (--se): N 秒 -> その取り分の標準誤差 (bps。出せなければ None)。渡したときだけ ± を付ける。
+    spot (--spot-inventory): (在庫が無く売り指値を出せなかった回数, 数量を在庫まで減らした回数)"""
     sym = instrument.symbol if instrument else "$"
     quote = instrument.quote if instrument else "USD"
     hours = res.observed_ms / 3_600_000
@@ -454,7 +574,12 @@ def format_result(
     lines.append("\n逆選択 (約定 1 件の取り分。bps、代金で加重、手数料を引く前。約定値段に対するミッドの位置)")
     lines.append(f"  約定した瞬間  {res.edge_bps:+7.2f}")
     for h, (bps, n) in sorted(res.markouts.items()):
-        lines.append(f"  {h:>3} 秒後     {bps:+7.2f}   ({n} 件。瞬間との差 {bps - res.edge_bps:+.2f} が逆選択)")
+        pm = ""
+        if errors is not None:
+            pm = f" ± {errors[h]:.2f}" if errors.get(h) is not None else " ± ?"
+        lines.append(f"  {h:>3} 秒後     {bps:+7.2f}{pm}   ({n} 件。瞬間との差 {bps - res.edge_bps:+.2f} が逆選択)")
+    if errors is not None and res.markouts:
+        lines.append(f"  {error_note}")
     if res.fills and not res.markouts:
         lines.append("  (N 秒後まで記録が続いている約定がありません)")
 
@@ -466,7 +591,12 @@ def format_result(
         f"  最後      {res.position:+g} 枚 ({sym}{res.position * res.last_mid:+,.0f})  "
         f"テイカーで閉じるなら手数料 {sym}{close_cost:.4f} + スプレッドの半分が別にかかる (上の損益には未計上)"
     )
-    if instrument and not instrument.can_short:
+    if instrument and not instrument.can_short and spot is not None:
+        lines.append(
+            f"\n※ 現物の在庫制約あり (--spot-inventory): 在庫 0 から始め、持っている在庫までしか売りに出していない。"
+            f"在庫が無くて売り指値を出せなかった判断が {spot[0]} 回、数量を在庫まで減らした判断が {spot[1]} 回"
+        )
+    elif instrument and not instrument.can_short:
         # 現物は在庫が無いと売れないが、再生はそれを守らせていない。どれだけ頼っているかを出す
         pos = res.position - sum(f.side * f.size for f in res.fills)
         n = usd = 0.0

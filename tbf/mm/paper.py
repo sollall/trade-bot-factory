@@ -60,6 +60,8 @@ class RunConfig:
 
 def load_run(store: MmStore, run: Optional[int] = None) -> Optional[RunConfig]:
     """run を省くと最後の run"""
+    if not store.has_table("paper_runs"):  # 読み取り専用で開いた、paper より前の古い db
+        return None
     rows = store.query(
         "SELECT * FROM paper_runs WHERE id = COALESCE(?, (SELECT MAX(id) FROM paper_runs))", (run,))
     if not rows:

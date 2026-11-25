@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+from array import array
 from typing import Optional
 
+from tbf.mm.book import trade_order
 from tbf.mm.replay import DEFAULT_MAKER_RATE, MAX_BOOK_GAP_MS
-from tbf.mm.store import MmStore
+from tbf.mm.store import FOREVER, MmStore
 
 
-def quantile(sorted_values: list[float], q: float) -> float:
+def quantile(sorted_values, q: float) -> float:
     if not sorted_values:
         return 0.0
     return sorted_values[min(len(sorted_values) - 1, int(len(sorted_values) * q))]
 
 
-def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = None) -> str:
-    """maker_rate を省くと、銘柄ごとに会場の値 (記録を始めたときに API から取ったもの) を使う"""
+def _sorted(values: array) -> array:
+    """並べ替えた写し。同じ詰まった形で持つ (100 万件でも 8MB。Python のリストのままだと数倍になる)"""
+    return array(values.typecode, sorted(values))
+
+
+def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = None, until: int = FOREVER) -> str:
+    """maker_rate を省くと、銘柄ごとに会場の値 (記録を始めたときに API から取ったもの) を使う。
+    since〜until (どちらも含む) の気配と、その間の約定だけを数える。
+    気配は最良気配だけを 1 件ずつ読み、数字の列として持つ (板の全段をメモリに載せない)"""
     lines = []
     venue = store.venue()
     if venue != "hyperliquid" and store.coins():
@@ -24,37 +33,46 @@ def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = N
         inst = store.instrument(coin)
         sym = inst.symbol if inst else "$"
         maker_bps = (maker_rate if maker_rate is not None else inst.maker_rate if inst else DEFAULT_MAKER_RATE) * 10_000
-        books = store.books(coin, since)
-        if len(books) < 2:
+        times, lag, ticks = array("q"), array("q"), array("q")
+        spreads, bid_usd, ask_usd = array("d"), array("d"), array("d")
+        mid = 0.0
+        for t, recv, bid, ask, bid_sz, ask_sz in store.iter_tops(coin, since, until):
+            mid = (bid + ask) / 2
+            times.append(t)
+            lag.append(recv - t)
+            spreads.append((ask - bid) / mid * 10_000)
+            bid_usd.append(bid_sz * bid)
+            ask_usd.append(ask_sz * ask)
+            if inst and inst.tick:
+                ticks.append(round((ask - bid) / inst.tick))
+        if len(times) < 2:
             continue
-        start, end = books[0].time, books[-1].time
+        n_books = len(times)
+        start, end = times[0], times[-1]
         # 記録が途切れていた時間は「1 時間あたり」の分母に入れない
-        steps = [b.time - a.time for a, b in zip(books, books[1:])]
+        steps = array("q", (times[k] - times[k - 1] for k in range(1, n_books)))
         hours = sum(s for s in steps if s <= MAX_BOOK_GAP_MS) / 3_600_000
-        covered = [(a.time, b.time) for a, b in zip(books, books[1:]) if b.time - a.time <= MAX_BOOK_GAP_MS]
-        trades = [t for t in store.trades(coin, start) if t.time <= end]
-        # 約定は時刻順、covered も時刻順なので 1 回なめれば足りる
-        seen, i = [], 0
+        trades = sorted(store.iter_trades(coin, start, end), key=trade_order)
+        # 数えるのは、途切れていない気配の間 (前の気配より後、次の気配以前) に入った約定だけ。
+        # 約定も気配も時刻順なので 1 回なめれば足りる。i は「時刻が約定以降」の最初の気配
+        seen, i = [], 1
         for t in trades:
-            while i < len(covered) and covered[i][1] < t.time:
+            while i < n_books and times[i] < t.time:
                 i += 1
-            if i < len(covered) and covered[i][0] < t.time:
+            if i < n_books and times[i - 1] < t.time and steps[i - 1] <= MAX_BOOK_GAP_MS:
                 seen.append(t)
-        spreads = sorted(b.spread_bps for b in books)
-        bid_usd = sorted(b.bids[0][1] * b.best_bid for b in books)
-        ask_usd = sorted(b.asks[0][1] * b.best_ask for b in books)
+        spreads, bid_usd, ask_usd = _sorted(spreads), _sorted(bid_usd), _sorted(ask_usd)
         notional = sum(t.px * t.sz for t in seen)
         buys = sum(t.px * t.sz for t in seen if t.side == "B")
         unknown = sum(t.px * t.sz for t in seen if t.side == "U")
         med = quantile(spreads, 0.5)
-        lines.append(f"== {coin}  記録 {hours:.2f} 時間  気配 {len(books)} 件 (間隔の中央値 {quantile(sorted(steps), 0.5) / 1000:.1f} 秒)")
+        lines.append(f"== {coin}  記録 {hours:.2f} 時間  気配 {n_books} 件 (間隔の中央値 {quantile(_sorted(steps), 0.5) / 1000:.1f} 秒)")
         lines.append(
             f"  スプレッド (bps)   中央値 {med:6.2f}  p25 {quantile(spreads, 0.25):6.2f}  p75 {quantile(spreads, 0.75):6.2f}"
         )
         if inst and inst.tick:
             # 刻みが粗い銘柄では、スプレッドが刻み 1 つに張り付く。そこでは内側に指値を出せず、最良気配の列に並ぶしかない
-            mid = books[-1].mid
-            ticks = sorted(round((b.best_ask - b.best_bid) / inst.tick) for b in books)
+            ticks = _sorted(ticks)  # mid は最後の気配のミッド
             lines.append(
                 f"  刻み {inst.tick:g} (= {inst.tick / mid * 10_000:.3f} bps)   スプレッドは刻み {quantile(ticks, 0.5)} 個ぶん (中央値)、"
                 f"刻み 1 個だった割合 {sum(1 for t in ticks if t <= 1) / len(ticks) * 100:.0f}%   "
@@ -76,7 +94,8 @@ def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = N
             )
         gaps = store.gap_count(coin, start, end)
         tp = store.query(
-            "SELECT COUNT(*) FROM polls WHERE coin = ? AND kind = 'recentTrades' AND error IS NULL AND time >= ?", (coin, since)
+            "SELECT COUNT(*) FROM polls WHERE coin = ? AND kind = 'recentTrades' AND error IS NULL AND time >= ? AND time <= ?",
+            (coin, since, until)
         )[0][0]
         lines.append(
             f"  約定の取りこぼしの可能性  {gaps} 回 / 約定のポーリング {tp} 回  "
@@ -85,9 +104,11 @@ def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = N
         if store.source() == "ws":
             # 配信の記録: ポーリングは無い。受け取りの遅れ (手元の時計 − 取引所の時刻。時計のずれを含む) と切断の回数を出す
             lines.pop()
-            lag = [r[0] for r in store.query("SELECT recv - time FROM books WHERE coin = ? AND time >= ? ORDER BY 1", (coin, start))]
-            tlag = [r[0] for r in store.query("SELECT recv - time FROM trades WHERE coin = ? AND time >= ? ORDER BY 1", (coin, start))]
-            drops = store.query("SELECT COUNT(*) FROM polls WHERE kind = 'ws' AND error IS NOT NULL AND time >= ?", (since,))[0][0]
+            lag = _sorted(lag)
+            tlag = [r[0] for r in store.query(
+                "SELECT recv - time FROM trades WHERE coin = ? AND time >= ? AND time <= ? ORDER BY 1", (coin, start, until))]
+            drops = store.query(
+                "SELECT COUNT(*) FROM polls WHERE kind = 'ws' AND error IS NOT NULL AND time >= ? AND time <= ?", (since, until))[0][0]
             lines.append(f"  約定の取りこぼしの可能性  {gaps} 回 (配信が切れていた間)  配信の切断 {drops} 回")
             lines.append(
                 f"  配信の遅れ         気配 p50 {quantile(lag, 0.5):.0f}ms p95 {quantile(lag, 0.95):.0f}ms  "
@@ -97,12 +118,12 @@ def build_report(store: MmStore, since: int = 0, maker_rate: Optional[float] = N
             continue
         for kind, label in (("l2Book", "気配"), ("recentTrades", "約定")):
             p = store.query(
-                "SELECT COUNT(*) n, COALESCE(SUM(error IS NOT NULL), 0) errors FROM polls WHERE coin = ? AND kind = ? AND time >= ?",
-                (coin, kind, since),
+                "SELECT COUNT(*) n, COALESCE(SUM(error IS NOT NULL), 0) errors FROM polls WHERE coin = ? AND kind = ? AND time >= ? AND time <= ?",
+                (coin, kind, since, until),
             )[0]
             lat = [r[0] for r in store.query(
-                "SELECT latency_ms FROM polls WHERE coin = ? AND kind = ? AND time >= ? AND latency_ms IS NOT NULL ORDER BY latency_ms",
-                (coin, kind, since),
+                "SELECT latency_ms FROM polls WHERE coin = ? AND kind = ? AND time >= ? AND time <= ? AND latency_ms IS NOT NULL "
+                "ORDER BY latency_ms", (coin, kind, since, until),
             )]
             lines.append(
                 f"  {label}のポーリング   {p['n']} 回  エラー {p['errors']}  "

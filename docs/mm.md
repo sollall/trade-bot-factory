@@ -18,6 +18,7 @@ python -m tbf.mm record --venue bitbank --coins xrp_jpy,render_jpy --db data/mm_
 python -m tbf.mm report [--hours 6]              # 記録した市場の様子
 python -m tbf.mm replay --coin INJ               # 基準のクォーターで再生
 python -m tbf.mm replay --coin INJ --param half_spread_bps=4 --param skew_bps=6
+python -m tbf.mm replay --db data/mm_gmo.sqlite --since +24h --until +48h --by-day --se   # 長い記録を読む (下の「長い記録を読む」)
 python -m tbf.mm paper --coins MON,INJ           # 記録しながら、その場で疑似的に約定を付ける (record を兼ねる)
 python -m tbf.mm paper-report [--run 3]          # paper の成績 (run ごと、日ごと、時間帯ごと)
 python -m tbf.mm replay --run 3                  # paper の run を記録から流し直して突き合わせる
@@ -29,10 +30,10 @@ python -m tbf.mm replay --run 3                  # paper の run を記録から
 | コマンド | 主なオプション (既定) |
 |---|---|
 | `record` | `--venue` 会場 (hyperliquid)、`--interval` 気配を取る間隔の秒 (2)、`--trades-interval` 約定を取る間隔の秒 (10)、`--depth` 残す段数 (10)、`--budget` 流量制限のうち使う割合 (0.5)、`--minutes` この分数で止める |
-| `report` | `--maker-bps` メイカー手数料 (省くと会場の値。Hyperliquid は 1.5) |
+| `report` | `--maker-bps` メイカー手数料 (省くと会場の値。Hyperliquid は 1.5)、`--hours` / `--since` / `--until` 数える期間 |
 | `paper` | `record` のオプション + `--param k=v`、`--maker-bps` (別名 `--fee-bps`)、`--latency-ms`、`--no-cross-fill` |
 | `paper-report` | `--run` (省くと最後の run)、`--hours`、`--horizons` |
-| `replay` | `--coin`、`--run` (paper の run と同じ設定・区間で再生)、`--param k=v` (何度でも)、`--maker-bps` (省くと会場の値。Hyperliquid は 1.5)、`--latency-ms` 指値が板に載るまでの遅れ (250)、`--horizons` 逆選択を測る秒数 (5,30,60)、`--no-cross-fill` 約定の仮定 (c) を外す |
+| `replay` | `--coin`、`--run` (paper の run と同じ設定・区間で再生)、`--param k=v` (何度でも)、`--maker-bps` (省くと会場の値。Hyperliquid は 1.5)、`--latency-ms` 指値が板に載るまでの遅れ (250)、`--horizons` 逆選択を測る秒数 (5,30,60)、`--no-cross-fill` 約定の仮定 (c) を外す、`--hours` / `--since` / `--until` 期間、`--by-day` / `--by-hours N` / `--jst` 日ごとの表、`--se` 取り分の ±、`--spot-inventory` 現物の在庫制約 (下の「長い記録を読む」) |
 
 ## 会場
 
@@ -260,6 +261,10 @@ paper を配信で動かすときは、気配を受け取ってから 2 秒待�
 1 回あたりの取り分の上限です。実際には約定の直後に値段が不利に動く (逆選択) ので、これだけで判断せず
 `replay` を見てください。
 
+期間は `--hours N` (記録の末尾から遡る) か `--since` / `--until` (書き方は下の「長い記録を読む」) で切れます。
+`report` / `replay` / `paper-report` は db を **読み取り専用** で開きます。記録中の db に向けても何も書かず、
+記録側の書き込みも待たせません (読み取りは 2000 件ずつの短い問い合わせに切っています)。無いファイルを指すと、作らずにエラーで止まります。
+
 ## 再生 (`replay`)
 
 記録を時刻順に流し、クォーターが出した指値に、記録にある約定のうちどれが当たったかを決めます。
@@ -303,6 +308,48 @@ paper を配信で動かすときは、気配を受け取ってから 2 秒待�
 - **逆選択**: 約定した瞬間の取り分と、N 秒後のミッドで測り直した取り分。差が逆選択です。
   N 秒後は「N 秒たった後の最初の気配」で測るので、気配の間隔より細かくは測れません。
 - **在庫**: 最大、時間平均、最後に残った分。
+
+### 長い記録を読む (期間・日ごと・± ・複数銘柄・現物の在庫)
+
+どれも付けたときだけ効きます。付けなければ出力は今までと同じです。`replay --run` (paper との突き合わせ) とは一緒に使えません。
+
+```bash
+python -m tbf.mm replay --db gmo.sqlite --coin BTC_JPY --since +24h --until +48h     # 記録の先頭から 24〜48 時間
+python -m tbf.mm replay --db gmo.sqlite --coin BTC_JPY --since 2026-11-25T03:00 --until 2026-11-26T03:00   # UTC
+python -m tbf.mm replay --db gmo.sqlite --coin BTC_JPY --by-day --se                 # 1 週間を通しで流し、日ごとに割る
+python -m tbf.mm replay --db gmo.sqlite --by-day                                     # 全銘柄。銘柄ごとの 1 行と合計
+python -m tbf.mm replay --db bitbank.sqlite --coin xrp_jpy,eth_jpy --spot-inventory  # 現物: 持っていない分は売らない
+python -m tbf.mm report --db gmo.sqlite --since +24h --until +48h
+```
+
+- **期間 (`--since` / `--until`)**: `2026-11-25T03:00` は **UTC** (`2026-11-25T12:00+09:00` のように時差を付ければその時刻)。
+  `+24h` (`d` / `h` / `m`) は **その db の最初の気配から** の時間。`--since` は含み、`--until` は含みません
+  (`+0h〜+24h` と `+24h〜+48h` は重ならない)。`--hours` (末尾から遡る) とは一緒に使えません。
+  区間の頭では **在庫 0・履歴なし** から始めます (前の区間の在庫は引き継ぎません)。
+- **区間の終わりと「N 秒後」**: 指値を出すのは `--until` まで。5 秒後・60 秒後の取り分は、**区間より後の気配も使って測ります**。
+  測るだけでクォーターには渡さない (先読みにならない) ことと、使わないと区間の終わり 60 秒の約定が毎回落ちて、
+  区間を足しても通しと合わなくなるためです。`paper-report` / `replay --run` と同じ扱いです。
+- **日ごとの表 (`--by-day`、`--by-hours N`)**: 1 回の再生の約定を、**UTC** の日 (または N 時間) ごとに割り、
+  約定の件数・買/売・代金・瞬間 / N 秒後の取り分 (`--horizons` の秒数) を並べます。`--jst` で区切りを日本時間にします
+  (`--since` / `--until` は UTC のまま)。**在庫は通し** で、列はその区切りの終わりに持っていた枚数です。日ごとに在庫を 0 に戻したいときは、
+  `--since` / `--until` で 1 日ずつ流してください。
+- **取り分の ± (`--se [分]`)**: 標準誤差です。取り分は代金で加重した平均 (Σ取り分の金額 / Σ約定代金) なので、約定を時間の塊
+  (既定 5 分) に分け、塊ごとの金額 N と代金 D から `sqrt(G/(G−1)·Σ(N − R·D)²) / ΣD` (R は全体の取り分、G は約定のあった塊の数) で出します。
+  続けて付いた約定は同じ値動きに乗っていて独立でないので、件数ではなく塊で数えます。塊が 2 個に満たなければ `?`。
+  **± の 2 倍より 0 に近い取り分は、0 と区別できていない** と読んでください。塊が 10〜20 個しか無いうちは ± 自体も当てになりません。
+  日ごとの表と銘柄ごとの表には、`--se` を付けなくても ± が付きます。
+- **複数の銘柄**: `--coin` を省く (その db の全銘柄) か、カンマ区切りで渡すと、最初に銘柄ごとの 1 行と合計の表が出て、
+  その下に銘柄ごとの内訳が続きます。合計の取り分は全銘柄の約定を合わせて代金で加重したもの。金額はそのまま足しています
+  (1 つの db は 1 つの会場なので建値の通貨は同じ)。銘柄は 1 つずつ順に流し、互いの在庫は見ません。`--coin` に 1 つだけ渡せば今までどおりです。
+- **現物の在庫制約 (`--spot-inventory`)**: 現物の銘柄 (bitbank、GMO の現物。記録にある銘柄の情報で判断) で、売り指値の数量を
+  **板に載せる時点で持っている在庫まで** に絞ります。在庫が最小数量に届かなければ売り指値は出しません。在庫 0 から始まるので、
+  買いが約定するまでは買い指値だけです。売りから入れる銘柄 (GMO のレバレッジ、Hyperliquid) には効きません。
+  値段が同じで置いたままの売り指値は、後で在庫が増えても数量を増やしません (列の位置を保つ今までの扱いと同じ)。
+  **既定は付けない (今までどおり、在庫 0 から売れてしまう甘い側)** です。既存の結果と `paper` / `replay --run` の突き合わせを変えないためで、
+  現物の銘柄を評価するときは付けてください。付けないときは、今までどおり末尾に「在庫を 0 より下に押し下げた売り」の件数が出ます。
+- **大きい記録**: 気配と約定は 2000 件ずつ読み、メモリに残すのは約定の一覧だけです。2 時間の記録を 84 倍に並べた db
+  (0.9GB、1 銘柄の気配 110 万件) で、`replay` は 1 銘柄 24 秒・37MB、3 銘柄と合計で 68 秒・65MB、`report` は 10 秒・約 210MB でした
+  (手元の計測。変更前は同じ db で `replay` 2.2GB、`report` 3.8GB)。`paper-report` と `replay --run` は今も区間の気配を全部メモリに載せます。
 
 ### クォーターの書き方
 

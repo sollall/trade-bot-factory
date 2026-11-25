@@ -6,11 +6,14 @@ import dataclasses
 import json
 import sqlite3
 from pathlib import Path
+from typing import Iterator
 
 from tbf.mm.book import Book, Trade, trade_order
 from tbf.mm.venues import Instrument, hyperliquid_instrument
 
 FOREVER = 1 << 62
+#: 逐次読み (iter_*) が 1 回の問い合わせで取る行数。メモリに載るのはこの件数ぶんだけ
+CHUNK = 2000
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS coins (coin TEXT PRIMARY KEY, sz_decimals INTEGER NOT NULL, updated INTEGER NOT NULL);
@@ -69,11 +72,25 @@ CREATE TABLE IF NOT EXISTS paper_run_fees (run INTEGER NOT NULL, coin TEXT NOT N
 
 
 class MmStore:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, readonly: bool = False) -> None:
+        """readonly=True は読むだけ (report / replay / paper-report 用)。ファイルもテーブルも作らず、何も書かない。
+        記録中の db に向けてよい: 読み取りのロックは 1 回の問い合わせの間だけで、大きい読み出しは iter_* が
+        CHUNK 件ずつに切るので、記録側の commit を長く待たせない。ファイルが無ければ sqlite3.OperationalError"""
+        self.readonly = readonly
+        if readonly:
+            self.conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+            self.conn.row_factory = sqlite3.Row
+            # 古い db には後から足したテーブル (meta、instruments、paper_*) が無い。読むだけなので作らず、無いものとして読む
+            self._tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            return
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+
+    def has_table(self, name: str) -> bool:
+        """読み取り専用で開いた古い db には無いテーブルがある。書き込みで開いたときは必ず全部ある"""
+        return not self.readonly or name in self._tables
 
     # ---- 書き込み (record)
 
@@ -82,13 +99,13 @@ class MmStore:
 
     def venue(self) -> str:
         """この db の会場。会場を残す前に作った db は hyperliquid"""
-        rows = self.query("SELECT value FROM meta WHERE key = 'venue'")
+        rows = self.query("SELECT value FROM meta WHERE key = 'venue'") if self.has_table("meta") else []
         return rows[0][0] if rows else "hyperliquid"
 
     def source(self) -> str:
         """記録の取り方: "rest" (ポーリング) か "ws" (配信)。残す前に作った db は rest。
         再生の仮定の一部は取り方で変わる (tbf/mm/replay.py)"""
-        rows = self.query("SELECT value FROM meta WHERE key = 'source'")
+        rows = self.query("SELECT value FROM meta WHERE key = 'source'") if self.has_table("meta") else []
         return rows[0][0] if rows else "rest"
 
     def claim_venue(self, venue: str, source: str = "rest") -> None:
@@ -114,7 +131,7 @@ class MmStore:
             self.set_coin(inst.coin, inst.sz_decimals, now)  # 前の版のコードでも読めるように
 
     def instrument(self, coin: str) -> Instrument | None:
-        rows = self.query("SELECT spec FROM instruments WHERE coin = ?", (coin,))
+        rows = self.query("SELECT spec FROM instruments WHERE coin = ?", (coin,)) if self.has_table("instruments") else []
         if rows:
             return Instrument(**json.loads(rows[0][0]))
         d = self.sz_decimals(coin)
@@ -164,6 +181,52 @@ class MmStore:
         if coin is None:
             return self.query("SELECT COALESCE(MAX(time), 0) FROM books")[0][0]
         return self.query("SELECT COALESCE(MAX(time), 0) FROM books WHERE coin = ?", (coin,))[0][0]
+
+    def first_time(self, coin: str | None = None) -> int:
+        """記録の先頭 (取引所の時刻)。--since / --until の `+24h` はここから数える。記録が無ければ 0"""
+        if coin is None:
+            return min((self.first_time(c) for c in self.coins()), default=0)
+        return self.query("SELECT COALESCE(MIN(time), 0) FROM books WHERE coin = ?", (coin,))[0][0]
+
+    def iter_books(self, coin: str, since: int = 0, until: int = FOREVER, chunk: int = CHUNK) -> Iterator[Book]:
+        """books() と同じものを時刻順に 1 件ずつ。chunk 件ごとに問い合わせを切るので、気配が何百万件あっても
+        メモリに載るのは chunk 件だけで、読み取りのロックも持ち続けない (記録中の db を読める)"""
+        after = since - 1
+        while True:
+            rows = self.query(
+                "SELECT time, bids, asks FROM books WHERE coin = ? AND time > ? AND time <= ? ORDER BY time LIMIT ?",
+                (coin, after, until, chunk))
+            for r in rows:
+                yield Book(r[0], tuple(map(tuple, json.loads(r[1]))), tuple(map(tuple, json.loads(r[2]))))
+            if len(rows) < chunk:
+                return
+            after = rows[-1][0]
+
+    def iter_tops(self, coin: str, since: int = 0, until: int = FOREVER, chunk: int = CHUNK) -> Iterator[tuple]:
+        """最良気配だけを時刻順に: (time, recv, best_bid, best_ask, bid_sz, ask_sz)。板の JSON を読まないので速い (report 用)"""
+        after = since - 1
+        while True:
+            rows = self.query(
+                "SELECT time, recv, best_bid, best_ask, bid_sz, ask_sz FROM books WHERE coin = ? AND time > ? AND time <= ? "
+                "ORDER BY time LIMIT ?", (coin, after, until, chunk))
+            yield from map(tuple, rows)
+            if len(rows) < chunk:
+                return
+            after = rows[-1][0]
+
+    def iter_trades(self, coin: str, since: int = 0, until: int = FOREVER, chunk: int = CHUNK) -> Iterator[Trade]:
+        """約定を時刻順に 1 件ずつ。同じ時刻の中は tid の順で、trades() の並び (trade_order) とは違う。
+        再生は Sim.step が気配の間ごとに並べ直すので、時刻の順だけ合っていれば足りる"""
+        after = (since - 1, (1 << 63) - 1)  # (時刻, tid) の続きから。最初は since 以降の全部
+        while True:
+            rows = self.query(
+                "SELECT time, side, px, sz, tid FROM trades WHERE coin = ? AND (time, tid) > (?, ?) AND time <= ? "
+                "ORDER BY time, tid LIMIT ?", (coin, *after, until, chunk))
+            for r in rows:
+                yield Trade(r[0], r[1], r[2], r[3], r[4])
+            if len(rows) < chunk:
+                return
+            after = (rows[-1][0], rows[-1][4])
 
     def books(self, coin: str, since: int = 0, until: int = FOREVER) -> list[Book]:
         return [
