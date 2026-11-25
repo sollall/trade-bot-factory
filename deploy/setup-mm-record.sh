@@ -76,7 +76,7 @@ systemctl daemon-reload
 systemctl enable mm-record@gmo mm-record@bitbank
 systemctl restart mm-record@gmo mm-record@bitbank
 
-echo "== 自動の更新 (1 日 1 回、$BRANCH を見に行く。止めるなら AUTO_UPDATE=0 で流し直す)"
+echo "== 自動の更新 (1 分ごとに $BRANCH を見に行く。止めるなら AUTO_UPDATE=0 で流し直す)"
 install -m 0755 -o root -g root "$APP_DIR/deploy/mm-update.sh" /usr/local/sbin/mm-update
 install -m 0644 "$APP_DIR/deploy/mm-update.service" /etc/systemd/system/mm-update.service
 install -m 0644 "$APP_DIR/deploy/mm-update.timer" /etc/systemd/system/mm-update.timer
@@ -96,7 +96,7 @@ cat <<MSG
   ログ:   journalctl -u mm-record@gmo -u mm-record@bitbank -f
   集計:   cd $APP_DIR && sudo -u mm python3 -m tbf.mm report --venue gmo --db /var/lib/mm/gmo.sqlite --hours 24
   残り:   df -h /var/lib/mm
-  更新:   1 日 1 回、自動で $BRANCH を取り込みます (記録に関係する変更のときだけ起動し直す)
+  更新:   1 分ごとに、自動で $BRANCH を取り込みます (記録に関係する変更のときだけ起動し直す)
           今すぐ: systemctl start mm-update   結果: journalctl -u mm-update -n 20   次回: systemctl list-timers mm-update.timer
           追いかけるブランチを変える: /etc/mm-update.env の BRANCH を書き換える
           このスクリプトや unit の変更は自動では入りません: BRANCH=$BRANCH bash $APP_DIR/deploy/setup-mm-record.sh

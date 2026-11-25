@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# VPS が自分で GitHub を見に行き、更新があれば取り込む (mm-update.timer から 1 日 1 回、root で動く)。
+# VPS が自分で GitHub を見に行き、更新があれば取り込む (mm-update.timer から 1 分ごとに、root で動く)。
 # deploy/setup-mm-record.sh が /usr/local/sbin/mm-update にコピーして使う。
 #
 # 決めごと:

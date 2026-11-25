@@ -573,7 +573,7 @@ GMO コインと bitbank の配信 (WebSocket) を、会場ごとに 1 プロセ
   「配信の切断」と「約定の取りこぼしの可能性」の回数、「配信の遅れ」をここで見ます。
 - 再生も VPS の上でできます (標準ライブラリだけ): `sudo -u mm python3 -m tbf.mm replay --venue gmo --db /var/lib/mm/gmo.sqlite --coin BTC_JPY`。
 - 止める: `sudo systemctl disable --now mm-record@gmo mm-record@bitbank`。
-- **自動の更新**: 1 日 1 回 (日本時間の朝 4 時台)、VPS が自分で GitHub のブランチを見に行き、進んでいれば取り込みます
+- **自動の更新**: 1 分ごとに、VPS が自分で GitHub のブランチを見に行き、進んでいれば取り込みます
   (`deploy/mm-update.sh` を `mm-update.timer` が動かす)。GitHub に VPS の鍵は預けません。
   - 記録を起動し直すのは、記録に関係するファイルが変わったときだけ (数秒の切れ目)。再生・集計・クォーターだけの変更では止めません。
   - 取り込んだ版が読み込めない、起動し直した記録が動かない、のどちらかなら前の版に戻します。ブランチが巻き戻されていたら取り込みません。
