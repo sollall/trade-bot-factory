@@ -503,6 +503,32 @@ sudo -u mm python3 -m tbf.mm paper-report --db /var/lib/mm/mm.sqlite     # /opt/
 - 既定の間隔なら 3 銘柄までです (流量制限の歯止め)。arb と同じサーバーで回しても、Hyperliquid を叩くのは mm だけなので重みは変わりません。
 - この雛形は実際の systemd では試していません。
 
+### 国内 2 社の配信を記録し続ける (人間がやる)
+
+GMO コインと bitbank の配信 (WebSocket) を、会場ごとに 1 プロセスで記録し続けます。paper は回しません
+(記録さえあれば、どのクォーターでも後から `replay` で試せるので)。発注はせず、鍵も要りません。
+
+1. VPS を作成 (Ubuntu 24.04、1 vCPU / 1GB、ディスク 20GB 以上。**東京リージョン**)。**作成時に SSH 公開鍵を登録**する
+2. SSH でログインして実行 (`<ブランチ>` は `tbf/mm/streams.py` が入っているブランチ。main に入るまでは作業ブランチ名):
+   ```bash
+   git clone --branch <ブランチ> https://github.com/sollall/trade-bot-factory.git /tmp/tbf
+   sudo BRANCH=<ブランチ> bash /tmp/tbf/deploy/setup-mm-record.sh
+   ```
+
+スクリプトがやること: `deploy/setup-server.sh` と同じ守り (自動セキュリティ更新、SSH の鍵認証のみ化、ファイアウォール、fail2ban)、
+ログイン不可の専用ユーザー `mm`、コードは root 所有、両会場に 1 分ずつ試しにつないで集計を表示、
+`deploy/mm-record@.service` を `mm-record@gmo` / `mm-record@bitbank` として常駐。
+
+- 記録は `/var/lib/mm/gmo.sqlite` と `/var/lib/mm/bitbank.sqlite`。既定の 3 銘柄ずつで、2 時間に 11MB / 15MB ほど
+  (合わせて 1 日 0.3GB、1 週間 2GB 強)。消す仕組みはありません。`df -h /var/lib/mm` で残りを見ます。
+- 銘柄は `/etc/mm/gmo.env` / `/etc/mm/bitbank.env` の `MM_COINS`。変えたら `sudo systemctl restart mm-record@<会場>`。
+- 途中経過: `cd /opt/trade-bot-factory && sudo -u mm python3 -m tbf.mm report --venue gmo --db /var/lib/mm/gmo.sqlite --hours 24`。
+  「配信の切断」と「約定の取りこぼしの可能性」の回数、「配信の遅れ」をここで見ます。
+- 再生も VPS の上でできます (標準ライブラリだけ): `sudo -u mm python3 -m tbf.mm replay --venue gmo --db /var/lib/mm/gmo.sqlite --coin BTC_JPY`。
+- 止める: `sudo systemctl disable --now mm-record@gmo mm-record@bitbank`。
+- スクリプトは構文チェック、unit は `systemd-analyze verify` までで、実機では試していません。
+  プロキシを通さない直接の WebSocket 接続も未確認です (スクリプトの「1 分だけ試しに記録」で最初に分かります)。
+
 ## 確かめたこと・確かめていないこと
 
 確かめたこと (2026-11-22、手元から公開 API で):
