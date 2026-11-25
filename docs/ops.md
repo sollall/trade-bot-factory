@@ -148,6 +148,26 @@ ssh -L 3000:localhost:3000 -L 3001:localhost:3001 -L 9090:localhost:9090 <server
   (paper と live)。通知先に Discord / Slack / Telegram などを設定
 - Prometheus http://localhost:9090/alerts: `prometheus/alerts.yml` のアラート (cron 停止・bot 停止・エラー多発・戦略の遅れ・管理外の持ち高)
 
+### サーバーを持たずに URL で見る (Grafana Cloud)
+
+サーバーを用意しない場合は、Grafana Cloud (無料枠) に Worker の `/metrics` を読みに来てもらいます。
+ログインは Grafana のアカウントなので、URL にトークンは載りません。
+
+1. https://grafana.com でアカウントとスタックを作る (スタック名が URL になる: `https://<スタック名>.grafana.net`)
+2. Connections → Add new connection → **Metrics Endpoint** を選び、paper と live を 1 つずつ登録する
+   - Scrape job URL: `https://trade-bot-paper.<sub>.workers.dev/metrics` (live も同様)
+   - 認証: Bearer、値は Worker の `ADMIN_TOKEN`
+   - 間隔: 60 秒
+3. Dashboards → New → Import で `deploy/monitoring/grafana/dashboards/trade-bots.json` をアップロードする
+4. 画面上部の「データソース」で `grafanacloud-<スタック名>-prom` を選ぶ
+
+ダッシュボードの URL は `https://<スタック名>.grafana.net/d/trade-bot-factory` になります。
+
+- `ADMIN_TOKEN` を Grafana Cloud に預けることになります。同じトークンで bot の停止・再開の API も通るので、
+  気になる場合は `/metrics` 専用の読み取りトークンを Worker に足してから登録します
+- `prometheus/alerts.yml` のアラートは自動では入りません。使うなら Alerting に別途取り込みます
+- 無料枠には系列数と保存期間 (約 14 日) の上限があります。30 日のパネルは Worker が集計した値を出しているので影響しません
+
 ### この先の拡張
 
 - **Alertmanager**: `alerts.yml` のアラートを Discord / Slack に飛ばす (今は Uptime Kuma と Worker 自身の Webhook 通知で代替)

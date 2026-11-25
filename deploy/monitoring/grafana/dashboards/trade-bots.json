@@ -2,7 +2,7 @@
   "uid": "trade-bot-factory",
   "title": "trade-bot-factory",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "time": {
     "from": "now-7d",
@@ -16,11 +16,22 @@
   "templating": {
     "list": [
       {
+        "name": "datasource",
+        "label": "データソース",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1
+      },
+      {
         "name": "mode",
         "type": "query",
         "datasource": {
           "type": "prometheus",
-          "uid": "prometheus"
+          "uid": "${datasource}"
         },
         "query": {
           "query": "label_values(tbf_bots, mode)",
@@ -41,7 +52,7 @@
         "type": "query",
         "datasource": {
           "type": "prometheus",
-          "uid": "prometheus"
+          "uid": "${datasource}"
         },
         "query": {
           "query": "label_values(tbf_bot_equity_usd{mode=~\"$mode\"}, bot)",
@@ -66,7 +77,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -79,7 +90,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_heartbeat_age_seconds{mode=~\"$mode\"}",
           "legendFormat": "{{mode}}"
@@ -130,7 +141,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 6,
@@ -143,7 +154,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (mode) (tbf_bot_running{mode=~\"$mode\"})",
           "legendFormat": "{{mode}}"
@@ -185,7 +196,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 10,
@@ -198,7 +209,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (mode) (1 - tbf_bot_running{mode=~\"$mode\"})",
           "legendFormat": "{{mode}}"
@@ -244,7 +255,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 14,
@@ -257,7 +268,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (mode) (tbf_bot_errors_1h{mode=~\"$mode\"})",
           "legendFormat": "{{mode}}"
@@ -307,7 +318,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 18,
@@ -320,7 +331,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "count by (mode) (tbf_unmanaged_position_qty{mode=~\"$mode\"} != 0) or on() vector(0)",
           "legendFormat": "{{mode}}"
@@ -366,7 +377,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -379,7 +390,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_equity_usd{mode=~\"$mode\", bot=~\"$bot\"}",
           "legendFormat": "{{mode}}/{{bot}}"
@@ -410,7 +421,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -423,7 +434,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_return_ratio{mode=~\"$mode\", bot=~\"$bot\"}",
           "legendFormat": "{{mode}}/{{bot}}"
@@ -454,7 +465,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -467,7 +478,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_drawdown_ratio{mode=~\"$mode\", bot=~\"$bot\"}",
           "legendFormat": "{{mode}}/{{bot}}"
@@ -498,7 +509,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -511,7 +522,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_position_qty{mode=~\"$mode\", bot=~\"$bot\"}",
           "legendFormat": "{{mode}}/{{bot}} {{instrument}}"
@@ -540,7 +551,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -553,7 +564,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_consecutive_losses{mode=~\"$mode\", bot=~\"$bot\"}",
           "legendFormat": "{{mode}}/{{bot}}"
@@ -582,7 +593,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -595,7 +606,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_last_tick_duration_seconds{mode=~\"$mode\"}",
           "legendFormat": "{{mode}}"
@@ -626,7 +637,7 @@
       "type": "table",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -639,7 +650,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_build_info{mode=~\"$mode\"}",
           "instant": true,
@@ -677,7 +688,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -690,7 +701,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_exec_delay_seconds{mode=~\"$mode\", bot=~\"$bot\", stat=\"avg\"}",
           "legendFormat": "{{mode}}/{{bot}} avg"
@@ -699,7 +710,7 @@
           "refId": "B",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_exec_delay_seconds{mode=~\"$mode\", bot=~\"$bot\", stat=\"p95\"}",
           "legendFormat": "{{mode}}/{{bot}} p95"
@@ -731,7 +742,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -744,7 +755,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_bot_exec_gap_bps{mode=~\"$mode\", bot=~\"$bot\"}",
           "legendFormat": "{{mode}}/{{bot}}"
@@ -776,7 +787,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -789,7 +800,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "tbf_last_tick_lag_seconds{mode=~\"$mode\"}",
           "legendFormat": "{{mode}}"
