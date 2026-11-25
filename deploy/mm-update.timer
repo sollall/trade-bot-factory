@@ -1,0 +1,12 @@
+# /etc/systemd/system/mm-update.timer (deploy/setup-mm-record.sh が配置する)
+# 1 日 1 回、日本時間の朝 4 時台 (UTC 19:10 から最大 20 分のずれ) に更新を見に行く
+[Unit]
+Description=trade-bot-factory: daily update check for the market making recorder
+
+[Timer]
+OnCalendar=*-*-* 19:10:00 UTC
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

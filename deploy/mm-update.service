@@ -1,0 +1,10 @@
+# /etc/systemd/system/mm-update.service (deploy/setup-mm-record.sh が配置する)
+# GitHub の更新を取り込む (deploy/mm-update.sh)。mm-update.timer から動く
+[Unit]
+Description=trade-bot-factory: pull updates for the market making recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mm-update
